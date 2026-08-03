@@ -510,6 +510,20 @@ function stockRows(loc){
   rows.sort((a,b)=> a.item.name.localeCompare(b.item.name,"uk"));
   return rows;
 }
+const itemBatches = id => S.batches.filter(b=>b.itemId===id && b.qty>0.0001)
+  .sort((a,b)=> (dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15) || ORDER.indexOf(a.loc)-ORDER.indexOf(b.loc));
+
+/* після правки термінів однакові партії зливаються в одну */
+function mergeDupes(){
+  const seen = new Map();
+  S.batches.forEach(b=>{
+    const k = [b.loc, b.itemId, b.expiry||"", Math.round((b.price||0)*100)].join("|");
+    if(seen.has(k)){ const f = seen.get(k); f.qty += b.qty; b.qty = 0; }
+    else seen.set(k, b);
+  });
+  S.batches = S.batches.filter(b=>b.qty>0.0001);
+}
+
 function addBatch(loc, itemId, q, price, expiry, src){
   const same = S.batches.find(b => b.loc===loc && b.itemId===itemId && (b.expiry||"")===(expiry||"") && Math.abs((b.price||0)-(price||0))<0.005);
   if(same){ same.qty += q; return same; }
@@ -1063,19 +1077,82 @@ function viewApteka(){
   }
 
   function catView(){
+    const canEditExp = ME.loc==="apteka" && ME.admin;   // лише завідувач аптеки
     const q = flt.cat.trim().toLowerCase();
     const list = S.items.filter(i=> !q || i.name.toLowerCase().includes(q) || (i.nomen||"").toLowerCase().includes(q))
       .sort((a,b)=>a.name.localeCompare(b.name,"uk"));
     $("#body").innerHTML = `<div class="card"><header><h3>Каталог препаратів</h3><span class="spacer"></span>
       <span class="eyebrow">${list.length} найменувань</span></header>
       ${list.length? `<div class="tw"><table><thead><tr><th>Найменування</th><th>Ном. номер</th><th>Од.</th>
-        ${STOCK.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}<th class="num">Разом</th></tr></thead><tbody>
-        ${list.map(i=>{const per=STOCK.map(l=>avail(l,i.id)); const tot=per.reduce((a,b)=>a+b,0); return `<tr>
+        ${STOCK.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}<th class="num">Разом</th>
+        <th>Найближчий термін</th>${canEditExp?"<th></th>":""}</tr></thead><tbody>
+        ${list.map(i=>{const per=STOCK.map(l=>avail(l,i.id)); const tot=per.reduce((a,b)=>a+b,0);
+          const bs=itemBatches(i.id); const near=bs[0]?bs[0].expiry:null; const sh=shelf(near); return `<tr>
           <td class="name">${esc(i.name)}</td><td class="mono sub2">${esc(i.nomen||"—")}</td><td>${esc(i.unit)}</td>
           ${per.map(x=>`<td class="num" style="${x?"":"color:var(--faint)"}">${x?qty(x):"—"}</td>`).join("")}
-          <td class="num" style="font-weight:600">${qty(tot)}</td></tr>`}).join("")}
+          <td class="num" style="font-weight:600">${qty(tot)}</td>
+          <td>${bs.length? `<span class="tag ${sh.cls}"><span class="dot"></span>${dstr(near)}${bs.length>1?" +"+(bs.length-1):""}</span>`
+                : `<span class="sub2">немає партій</span>`}</td>
+          ${canEditExp? `<td style="text-align:right">${bs.length? `<button class="btn sm" data-exp="${i.id}">Термін</button>`:""}</td>`:""}
+          </tr>`}).join("")}
       </tbody></table></div>` : `<div class="empty"><strong>Каталог порожній</strong>Найменування додаються автоматично під час оприбуткування.</div>`}
     </div>`;
+    $("#body").querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>expiryModal(b.dataset.exp));
+  }
+}
+
+/* ---------- виправлення термінів придатності (лише завідувач аптеки) ---------- */
+function expiryModal(itemId){
+  if(!(ME.loc==="apteka" && ME.admin)) return toast("Термін придатності виправляє лише завідувач аптеки", true);
+  const it = item(itemId);
+  const bs = itemBatches(itemId);
+  if(!bs.length) return toast("У цього препарату немає партій на залишках", true);
+
+  modal(`Термін придатності — ${esc(it.name)}`, `
+    <p class="sub2" style="margin-top:0">Термін зберігається окремо для кожної партії. Виправляйте його, якщо в накладній була помилка або дату не вдалося розпізнати під час імпорту.</p>
+    <div class="tw" style="max-height:340px"><table><thead><tr>
+        <th>Де зберігається</th><th class="num">Кількість</th><th class="num">Ціна</th>
+        <th>Надійшло за</th><th style="width:180px">Придатний до</th><th>Стан</th></tr></thead><tbody>
+      ${bs.map(b=>{const sh=shelf(b.expiry); return `<tr>
+        <td><span class="tag">${LOCS[b.loc].short}</span> ${LOCS[b.loc].name}</td>
+        <td class="num">${qty(b.qty)} ${esc(it.unit)}</td>
+        <td class="num">${money(b.price)}</td>
+        <td class="sub2">${esc(b.src||"—")}</td>
+        <td><input type="date" data-bx="${b.id}" value="${esc(b.expiry||"")}"></td>
+        <td><span class="tag ${sh.cls}" data-st="${b.id}"><span class="dot"></span>${sh.label}</span></td>
+      </tr>`}).join("")}
+    </tbody></table></div>
+    <div class="field" style="margin-top:14px"><label>Підстава для виправлення</label>
+      <input type="text" id="exp-why" placeholder="Наприклад: помилка в накладній НК-004, звірено з упаковкою"></div>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти терміни", cls:"primary", f:save2}]);
+
+  // стан оновлюється одразу, ще до збереження
+  document.querySelectorAll("[data-bx]").forEach(inp=>inp.oninput = ()=>{
+    const tag = document.querySelector(`[data-st="${inp.dataset.bx}"]`);
+    const sh = shelf(inp.value);
+    if(tag){ tag.className = "tag " + sh.cls; tag.innerHTML = `<span class="dot"></span>${sh.label}`; }
+  });
+
+  function save2(){
+    const why = document.getElementById("exp-why").value.trim();
+    const changes = [];
+    document.querySelectorAll("[data-bx]").forEach(inp=>{
+      const b = S.batches.find(x=>x.id===inp.dataset.bx);
+      if(!b) return;
+      const was = b.expiry || "", now = inp.value || "";
+      if(was !== now) changes.push({b, was, now});
+    });
+    if(!changes.length){ close(); return toast("Терміни не змінювались"); }
+    changes.forEach(c=>{
+      c.b.expiry = c.now;
+      log("Виправлення", `Термін придатності «${it.name}» (${LOCS[c.b.loc].name}, ${qty(c.b.qty)} ${it.unit}): `
+        + `${c.was?dstr(c.was):"не вказано"} → ${c.now?dstr(c.now):"не вказано"}${why?" — "+why:""}`,
+        {item:it.name, was:c.was, now:c.now});
+    });
+    mergeDupes();
+    close();
+    toast(changes.length===1 ? "Термін виправлено" : "Виправлено термінів: " + changes.length);
+    render();
   }
 }
 
@@ -1089,7 +1166,8 @@ function batchModal(loc, itemId){
         <td class="sub2">${esc(b.src||"—")}</td>
         <td><span class="tag ${s.cls}"><span class="dot"></span>${s.label}</span></td></tr>`}).join("")}
     </tbody></table></div>`,
-    [{t:"Списати з залишку", cls:"danger", f:()=>{close(); writeOffModal(loc, itemId);}},{t:"Закрити", f:close}]);
+    [ ...(ME.loc==="apteka" && ME.admin ? [{t:"Виправити терміни", f:()=>{close(); expiryModal(itemId);}}] : []),
+      {t:"Списати з залишку", cls:"danger", f:()=>{close(); writeOffModal(loc, itemId);}},{t:"Закрити", f:close}]);
 }
 
 function writeOffModal(loc, itemId){
@@ -1782,7 +1860,7 @@ function viewHist(){
   });
 
   const types = ["all", ...new Set(S.log.map(l=>l.type))];
-  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Доступ":"","Система":""};
+  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Доступ":"","Система":""};
 
   $("#view").innerHTML = `<div class="row" style="margin-bottom:14px">
       <div class="field" style="width:220px"><label>Тип операції</label>
