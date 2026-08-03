@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Медична частина — облік медикаментів</title>
+<title>Медична частина КІ НГУ — облік медикаментів</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@600;700&display=swap" rel="stylesheet">
@@ -54,6 +54,7 @@ h1,h2,h3,h4{margin:0;font-weight:600}
 .brand .cross:before{left:9px;top:0;width:4px;height:22px}
 .brand .cross:after{top:9px;left:0;height:4px;width:22px}
 .brand h1{font-family:"IBM Plex Serif",Georgia,serif;font-size:16px;letter-spacing:.01em;color:#F2F7F3}
+.brand .org{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.22em;color:#7FBFA4;margin-bottom:9px}
 .brand p{margin:6px 0 0;font-size:11px;color:#8B9C92;letter-spacing:.02em}
 
 .nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;flex:1}
@@ -200,7 +201,8 @@ textarea{resize:vertical;min-height:60px}
 .auth-side .cross:before,.auth-side .cross:after{content:"";position:absolute;background:#7FBFA4}
 .auth-side .cross:before{left:12px;top:0;width:6px;height:30px}
 .auth-side .cross:after{top:12px;left:0;height:6px;width:30px}
-.auth-side h1{font-family:"IBM Plex Serif",Georgia,serif;font-size:30px;color:#F2F7F3;margin:26px 0 10px;letter-spacing:-.01em;line-height:1.15}
+.auth-side h1{font-family:"IBM Plex Serif",Georgia,serif;font-size:30px;color:#F2F7F3;margin:8px 0 10px;letter-spacing:-.01em;line-height:1.15}
+.auth-side .org{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.24em;color:#7FBFA4;margin-top:24px}
 .auth-side p{margin:0;color:#8B9C92;font-size:13.5px;line-height:1.55}
 .auth-side .note{border-top:1px solid rgba(255,255,255,.1);padding-top:16px;font-size:12px;color:#7C8E84;line-height:1.55}
 .auth-main{padding:46px 44px;max-width:620px;width:100%}
@@ -257,6 +259,7 @@ textarea{resize:vertical;min-height:60px}
 <div class="app" id="app" hidden>
   <aside class="rail">
     <div class="brand">
+      <div class="org">КІ НГУ</div>
       <div class="mark"><div class="cross"></div><h1>Медична частина</h1></div>
       <p>Облік і рух медикаментів</p>
     </div>
@@ -662,6 +665,7 @@ function renderAuth(){
     <div class="auth-side">
       <div>
         <div class="cross"></div>
+        <div class="org">КІ НГУ</div>
         <h1>Медична<br>частина</h1>
         <p>Облік і рух медикаментів: аптека, підрозділи, заявки.</p>
       </div>
