@@ -1,0 +1,1836 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Медична частина — облік медикаментів</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+:root{
+  --bg:#E4E8DF;
+  --surface:#FBFBF7;
+  --surface-2:#F2F4EE;
+  --rail:#16211C;
+  --rail-2:#22322A;
+  --rail-3:#2E4137;
+  --ink:#15201C;
+  --muted:#65726B;
+  --faint:#909B94;
+  --line:#D3DACC;
+  --line-strong:#B9C3B2;
+  --accent:#14624F;
+  --accent-soft:#DCEAE3;
+  --ok:#2E6F4E;
+  --warn:#9A6B0E;
+  --warn-soft:#F6EBD2;
+  --crit:#9E2430;
+  --crit-soft:#F6DEDF;
+  --radius:3px;
+  --shadow:0 1px 0 rgba(21,32,28,.05), 0 8px 24px -18px rgba(21,32,28,.45);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:14px;line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3,h4{margin:0;font-weight:600}
+.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:236px 1fr;min-height:100vh}
+.rail{background:var(--rail);color:#DCE5DE;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:20px 20px 16px;border-bottom:1px solid rgba(255,255,255,.09)}
+.brand .mark{display:flex;align-items:center;gap:9px}
+.brand .cross{width:22px;height:22px;position:relative;flex:0 0 auto}
+.brand .cross:before,.brand .cross:after{content:"";position:absolute;background:#7FBFA4}
+.brand .cross:before{left:9px;top:0;width:4px;height:22px}
+.brand .cross:after{top:9px;left:0;height:4px;width:22px}
+.brand h1{font-family:"IBM Plex Serif",Georgia,serif;font-size:16px;letter-spacing:.01em;color:#F2F7F3}
+.brand p{margin:6px 0 0;font-size:11px;color:#8B9C92;letter-spacing:.02em}
+
+.nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;flex:1}
+.nav button{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:none;border:0;color:#B8C7BE;padding:10px 11px;border-radius:var(--radius);cursor:pointer;
+  font-size:13.5px;letter-spacing:.01em;
+}
+.nav button:hover{background:var(--rail-2);color:#EAF2EC}
+.nav button.on{background:var(--rail-3);color:#fff;font-weight:500}
+.nav button .idx{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#6E8578;width:14px}
+.nav button.on .idx{color:#8FD3B4}
+.nav button .badge{margin-left:auto;background:#B4442F;color:#fff;font-size:10.5px;font-family:"IBM Plex Mono",monospace;padding:1px 6px;border-radius:20px}
+
+.role-box{padding:14px 16px 18px;border-top:1px solid rgba(255,255,255,.09);background:rgba(0,0,0,.14)}
+.role-box .eyebrow{color:#6E8578;margin-bottom:7px}
+.role-box select{
+  width:100%;background:var(--rail-2);border:1px solid rgba(255,255,255,.14);color:#EAF2EC;
+  padding:8px 9px;border-radius:var(--radius);cursor:pointer
+}
+.role-box .hint{margin:9px 0 0;font-size:11px;color:#8B9C92;line-height:1.4}
+
+.work{min-width:0;display:flex;flex-direction:column}
+.topbar{
+  background:var(--surface);border-bottom:1px solid var(--line);
+  padding:16px 26px;display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;
+  position:sticky;top:0;z-index:20
+}
+.topbar h2{font-family:"IBM Plex Serif",Georgia,serif;font-size:22px;letter-spacing:-.01em}
+.topbar .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
+.topbar .spacer{flex:1}
+.view{padding:22px 26px 60px;max-width:1400px}
+
+/* ---------- primitives ---------- */
+.btn{
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);
+  padding:8px 13px;cursor:pointer;font-size:13px;transition:.14s;white-space:nowrap
+}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:#0F5142;color:#fff}
+.btn.danger{color:var(--crit);border-color:#DFC0C3}
+.btn.danger:hover{background:var(--crit);color:#fff;border-color:var(--crit)}
+.btn.sm{padding:5px 9px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.card > header{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+.card > header h3{font-size:14px}
+.card > header .spacer{flex:1}
+.pad{padding:16px}
+
+.grid{display:grid;gap:14px}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:1fr 1fr}
+.split{display:grid;grid-template-columns:1.55fr 1fr;gap:14px;align-items:start}
+
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 15px;box-shadow:var(--shadow)}
+.stat .v{font-family:"IBM Plex Mono",monospace;font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-top:8px}
+.stat .n{font-size:11.5px;color:var(--muted);margin-top:5px}
+.stat.warn{border-left:3px solid var(--warn)}
+.stat.crit{border-left:3px solid var(--crit)}
+.stat.acc{border-left:3px solid var(--accent)}
+.stat.ok{border-left:3px solid var(--ok)}
+
+table{width:100%;border-collapse:collapse}
+th{
+  text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);font-weight:500;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--surface-2);
+  position:sticky;top:0
+}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr:hover{background:#F5F8F2}
+td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+.tw{overflow:auto;max-height:560px}
+.name{font-weight:500}
+.sub2{font-size:11.5px;color:var(--muted)}
+
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 7px;border-radius:20px;border:1px solid var(--line-strong);background:var(--surface-2);white-space:nowrap}
+.tag.ok{color:var(--ok);border-color:#BCD8C6;background:#E7F2EA}
+.tag.warn{color:var(--warn);border-color:#E4CE9E;background:var(--warn-soft)}
+.tag.crit{color:var(--crit);border-color:#E0B6BA;background:var(--crit-soft)}
+.tag.acc{color:var(--accent);border-color:#B4D3C8;background:var(--accent-soft)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:11.5px;color:var(--muted)}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  background:#fff;border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px 9px;width:100%
+}
+textarea{resize:vertical;min-height:60px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+
+.empty{padding:34px 20px;text-align:center;color:var(--muted)}
+.empty strong{display:block;color:var(--ink);font-size:14.5px;margin-bottom:5px;font-weight:600}
+
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:none;padding:7px 14px;cursor:pointer;font-size:13px;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--accent);color:#fff}
+
+/* ---------- signature: shelf-life ribbon ---------- */
+.ribbon{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.ribbon .head{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.ribbon .legend{margin-left:auto;display:flex;gap:12px;font-size:11px;color:var(--muted);align-items:center}
+.ribbon .legend i{width:9px;height:9px;display:inline-block;margin-right:4px;border-radius:1px}
+.ribbon svg{display:block;width:100%;height:auto;background:linear-gradient(90deg,#FBEEEE 0 8.5%, #FBFBF7 8.5% 100%)}
+.ribbon .readout{padding:9px 16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);min-height:38px;display:flex;align-items:center;gap:9px}
+.tick{cursor:pointer}
+.tick rect{transition:.12s}
+.tick:hover rect{stroke:var(--ink);stroke-width:1.2}
+
+/* ---------- modal ---------- */
+.scrim{position:fixed;inset:0;background:rgba(20,30,26,.5);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px;z-index:100;overflow:auto}
+.modal{background:var(--surface);border-radius:var(--radius);width:100%;max-width:820px;box-shadow:0 30px 70px -30px rgba(0,0,0,.6)}
+.modal header{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+.modal header h3{font-family:"IBM Plex Serif",serif;font-size:17px}
+.modal .body{padding:18px}
+.modal footer{padding:13px 18px;border-top:1px solid var(--line);display:flex;gap:9px;justify-content:flex-end;background:var(--surface-2)}
+.x{margin-left:auto;background:none;border:0;font-size:20px;line-height:1;cursor:pointer;color:var(--muted);padding:2px 6px}
+.x:hover{color:var(--crit)}
+
+#toast{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--rail);color:#EAF2EC;padding:11px 15px;border-radius:var(--radius);font-size:13px;box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:340px;animation:in .18s ease-out}
+.toast.bad{background:var(--crit)}
+@keyframes in{from{opacity:0;transform:translateY(6px)}}
+
+.drop{border:1.5px dashed var(--line-strong);border-radius:var(--radius);padding:26px;text-align:center;background:var(--surface-2);cursor:pointer}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop strong{display:block;margin-bottom:5px}
+.drop span{font-size:12.5px;color:var(--muted)}
+
+.lines td{padding:6px 8px}
+.lines input{padding:6px 8px}
+.bar{height:5px;background:var(--line);border-radius:20px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--accent)}
+
+/* ---------- екран входу ---------- */
+.auth{min-height:100vh;display:grid;grid-template-columns:420px 1fr;background:var(--surface)}
+.auth-side{background:var(--rail);color:#DCE5DE;padding:46px 40px;display:flex;flex-direction:column;justify-content:space-between}
+.auth-side .cross{width:30px;height:30px;position:relative}
+.auth-side .cross:before,.auth-side .cross:after{content:"";position:absolute;background:#7FBFA4}
+.auth-side .cross:before{left:12px;top:0;width:6px;height:30px}
+.auth-side .cross:after{top:12px;left:0;height:6px;width:30px}
+.auth-side h1{font-family:"IBM Plex Serif",Georgia,serif;font-size:30px;color:#F2F7F3;margin:26px 0 10px;letter-spacing:-.01em;line-height:1.15}
+.auth-side p{margin:0;color:#8B9C92;font-size:13.5px;line-height:1.55}
+.auth-side .note{border-top:1px solid rgba(255,255,255,.1);padding-top:16px;font-size:12px;color:#7C8E84;line-height:1.55}
+.auth-main{padding:46px 44px;max-width:620px;width:100%}
+.auth-main h2{font-family:"IBM Plex Serif",serif;font-size:21px;margin-bottom:4px}
+.auth-main .lede{color:var(--muted);font-size:13px;margin:0 0 22px}
+.units{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:9px;margin-bottom:26px}
+.unit{
+  text-align:left;background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);
+  padding:13px 14px;cursor:pointer;transition:.14s;display:flex;flex-direction:column;gap:3px
+}
+.unit:hover{border-color:var(--accent);background:var(--surface-2)}
+.unit.on{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.unit b{font-weight:500;font-size:13.5px}
+.unit span{font-size:11px;color:var(--muted)}
+.unit .code{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.12em;color:var(--faint)}
+.auth-form{border-top:1px solid var(--line);padding-top:22px;animation:in .18s ease-out}
+.auth-err{background:var(--crit-soft);border:1px solid #E0B6BA;color:var(--crit);padding:9px 12px;border-radius:var(--radius);font-size:12.5px;margin-bottom:14px}
+.auth-tip{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--warn);padding:11px 13px;border-radius:var(--radius);font-size:12px;color:var(--muted);margin-top:22px;line-height:1.55}
+.auth-tip code{font-family:"IBM Plex Mono",monospace;background:#fff;border:1px solid var(--line);padding:1px 5px;border-radius:2px;color:var(--ink)}
+
+/* ---------- профіль у панелі ---------- */
+.me{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.me .av{
+  width:34px;height:34px;border-radius:50%;background:var(--rail-3);color:#8FD3B4;flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.04em
+}
+.me .who{min-width:0}
+.me .who b{display:block;font-size:13px;font-weight:500;color:#EAF2EC;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.me .who span{font-size:11px;color:#8B9C92}
+.me-acts{display:flex;gap:6px;flex-wrap:wrap}
+.me-acts button{
+  background:var(--rail-2);border:1px solid rgba(255,255,255,.13);color:#B8C7BE;
+  padding:5px 9px;border-radius:var(--radius);font-size:11.5px;cursor:pointer
+}
+.me-acts button:hover{background:var(--rail-3);color:#fff;border-color:rgba(255,255,255,.25)}
+
+@media (max-width:860px){ .auth{grid-template-columns:1fr} .auth-side{padding:30px 24px} .auth-side h1{font-size:24px;margin-top:16px} .auth-main{padding:26px 24px} }
+@media (max-width:1080px){ .g4{grid-template-columns:repeat(2,1fr)} .split{grid-template-columns:1fr} .g3{grid-template-columns:1fr} .g2{grid-template-columns:1fr} }
+@media (max-width:760px){
+  .app{grid-template-columns:1fr}
+  .rail{position:static;height:auto}
+  .nav{flex-direction:row;overflow:auto;padding:8px}
+  .nav button{width:auto;white-space:nowrap}
+  .role-box{display:flex;gap:10px;align-items:center}
+  .role-box .eyebrow,.role-box .hint{display:none}
+  .view{padding:16px}
+  .topbar{padding:14px 16px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div id="auth" hidden></div>
+
+<div class="app" id="app" hidden>
+  <aside class="rail">
+    <div class="brand">
+      <div class="mark"><div class="cross"></div><h1>Медична частина</h1></div>
+      <p>Облік і рух медикаментів</p>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="role-box" id="meBox"></div>
+  </aside>
+  <main class="work">
+    <div class="topbar">
+      <div>
+        <h2 id="ttl">Дашборд</h2>
+        <div class="sub" id="sub"></div>
+      </div>
+      <div class="spacer"></div>
+      <div id="actions" class="row"></div>
+    </div>
+    <div class="view" id="view"></div>
+  </main>
+</div>
+<div id="modal-root"></div>
+<div id="toast"></div>
+
+
+<script>
+/* ---------------------------------------------------------------
+   Серверне сховище. У Claude застосунок користується window.storage;
+   на Render його немає, тому тут той самий інтерфейс поверх /api/kv.
+   Ключ сесії лишається у браузері, решта — спільна для всіх.
+----------------------------------------------------------------*/
+(function(){
+  var LOCAL = function(k){ return String(k).indexOf("medcrm:sess") === 0; };
+  var revs = {}, syncing = false;
+
+  async function req(method, url, body){
+    var r = await fetch(url, {
+      method: method, credentials: "same-origin",
+      headers: body ? {"Content-Type":"application/json"} : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if(r.status === 401){ location.href = "/login"; throw new Error("Потрібен вхід"); }
+    return r;
+  }
+
+  window.storage = {
+    async get(key){
+      if(LOCAL(key)){
+        var v = localStorage.getItem(key);
+        if(v === null) throw new Error("Ключа немає");
+        return {key:key, value:v};
+      }
+      var r = await req("GET", "/api/kv/" + encodeURIComponent(key));
+      if(r.status === 404) throw new Error("Ключа немає");
+      var j = await r.json(); revs[key] = j.rev;
+      return {key:key, value:j.value};
+    },
+    async set(key, value){
+      if(LOCAL(key)){ localStorage.setItem(key, value); return {key:key, value:value}; }
+      var r = await req("PUT", "/api/kv/" + encodeURIComponent(key),
+                        {value:value, rev: revs[key] == null ? null : revs[key]});
+      if(r.status === 409){ conflict(); throw new Error("Дані змінив інший користувач"); }
+      var j = await r.json(); revs[key] = j.rev;
+      return {key:key, value:value};
+    },
+    async delete(key){
+      if(LOCAL(key)){ localStorage.removeItem(key); return {key:key, deleted:true}; }
+      await req("DELETE", "/api/kv/" + encodeURIComponent(key));
+      delete revs[key];
+      return {key:key, deleted:true};
+    },
+    async list(prefix){
+      var r = await req("GET", "/api/kv?prefix=" + encodeURIComponent(prefix || ""));
+      return await r.json();
+    }
+  };
+
+  /* Якщо базу змінив інший підрозділ — попереджаємо і перезавантажуємо,
+     але не посеред заповнення форми. */
+  function conflict(){ banner("Дані оновив інший користувач. Сторінку буде перезавантажено, щоб ви бачили актуальні залишки."); }
+
+  var pending = false;
+  function banner(text){
+    if(pending) return; pending = true;
+    var b = document.createElement("div");
+    b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:999;background:#9A6B0E;color:#fff;" +
+      "padding:11px 16px;font:14px/1.4 'IBM Plex Sans',system-ui,sans-serif;text-align:center";
+    b.textContent = text;
+    document.body.appendChild(b);
+    (function wait(){
+      var busy = document.getElementById("modal-root") && document.getElementById("modal-root").innerHTML.length;
+      if(busy) return setTimeout(wait, 1500);
+      setTimeout(function(){ location.reload(); }, 1200);
+    })();
+  }
+
+  /* дві серверні кнопки в блоці профілю */
+  document.addEventListener("DOMContentLoaded", function(){
+    var box = document.getElementById("meBox");
+    if(!box) return;
+    var add = function(){
+      var acts = box.querySelector(".me-acts");
+      if(!acts || acts.querySelector("[data-srv]")) return;
+      var a = document.createElement("button");
+      a.dataset.srv = "1"; a.textContent = "Копія бази";
+      a.title = "Завантажити резервну копію всієї бази у файл";
+      a.onclick = function(){ location.href = "/api/backup"; };
+      var b = document.createElement("button");
+      b.dataset.srv = "1"; b.textContent = "Вийти з сайту";
+      b.onclick = async function(){ await fetch("/api/logout", {method:"POST"}); location.href = "/login"; };
+      acts.appendChild(a); acts.appendChild(b);
+    };
+    new MutationObserver(add).observe(box, {childList:true, subtree:true});
+    add();
+  });
+
+  setInterval(async function(){
+    if(syncing || pending || document.hidden) return;
+    syncing = true;
+    try{
+      var key = "medcrm:v1";
+      if(revs[key] != null){
+        var r = await fetch("/api/rev/" + encodeURIComponent(key), {credentials:"same-origin"});
+        if(r.ok){
+          var j = await r.json();
+          if(j.rev > revs[key]) banner("Дані оновив інший користувач. Оновлюю сторінку…");
+        }
+      }
+    }catch(e){}
+    syncing = false;
+  }, 20000);
+})();
+</script>
+<script>
+"use strict";
+
+/* ======================= МОДЕЛЬ ======================= */
+
+const LOCS = {
+  apteka:   {id:"apteka",   name:"Аптека",            short:"АПТ", kind:"warehouse", supplier:null,     color:"#14624F"},
+  senior:   {id:"senior",   name:"Старша медсестра",  short:"СМС", kind:"unit",      supplier:"apteka", color:"#3A6B8A"},
+  feldsher: {id:"feldsher", name:"Фельдшер",          short:"ФЕЛ", kind:"unit",      supplier:"apteka", color:"#7A5B9E"},
+  doctors:  {id:"doctors",  name:"Лікарі",            short:"ЛІК", kind:"prescriber",supplier:null,     rxTo:"apteka", color:"#8A6A2E"},
+  post:     {id:"post",     name:"Пост медсестри",    short:"ПМС", kind:"sub",       supplier:"senior", color:"#2E7D6B"}
+};
+const ORDER = ["apteka","senior","feldsher","doctors","post"];
+const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
+const SKEY = "medcrm:v1";
+
+let S = null;          // стан
+let tab = "dash";      // активна вкладка
+let sub = {apteka:"stock", req:"pending", units:"senior"};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all"};
+
+const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
+const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
+const dparse = s => { if(!s) return null; const d=new Date(s); return isNaN(d)?null:d; };
+const dstr = s => { const d=dparse(s); return d? String(d.getDate()).padStart(2,"0")+"."+String(d.getMonth()+1).padStart(2,"0")+"."+d.getFullYear() : "—"; };
+const dtstr = ts => { const d=new Date(ts); return dstr(d)+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); };
+const daysLeft = s => { const d=dparse(s); return d===null? null : Math.round((d - today())/86400000); };
+const money = n => (Math.round((n||0)*100)/100).toLocaleString("uk-UA",{minimumFractionDigits:2,maximumFractionDigits:2});
+const qty = n => (Math.round((n||0)*1000)/1000).toLocaleString("uk-UA");
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function shelf(exp){
+  const d = daysLeft(exp);
+  if(d===null) return {k:"none", label:"Без терміну", cls:""};
+  if(d < 0)    return {k:"expired", label:"Прострочено "+Math.abs(d)+" дн.", cls:"crit"};
+  if(d <= 30)  return {k:"critical", label:"Спливає через "+d+" дн.", cls:"crit"};
+  if(d <= 90)  return {k:"soon", label:"Спливає через "+d+" дн.", cls:"warn"};
+  return {k:"ok", label:"Придатний "+d+" дн.", cls:"ok"};
+}
+const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"#3E7F63", none:"#909B94"};
+
+/* ---------- сховище ---------- */
+function blank(){
+  return {items:[], batches:[], requests:[], log:[], rx:[], users:[], role:"apteka", inv:0, req:0, rxNo:0};
+}
+async function load(){
+  try{
+    const r = await window.storage.get(SKEY);
+    if(r && r.value){ S = JSON.parse(r.value); }
+  }catch(e){ /* ключа ще немає */ }
+  if(!S || !Array.isArray(S.items) || !Array.isArray(S.batches)){ S = blank(); seed(); }
+  if(!S.users) S.users = [];
+  S.role = S.role in LOCS ? S.role : "apteka";
+  await ensureUsers();
+  migrate();
+  await loadSess();
+  save();
+}
+/* приведення раніше збереженої бази до нової моделі */
+function migrate(){
+  ["items","batches","requests","log","rx","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  if(typeof S.req !== "number") S.req = S.requests.length;
+  if(typeof S.inv !== "number") S.inv = 0;
+  if(!S.rx) S.rx = [];
+  if(S.rxNo == null) S.rxNo = 0;
+  const stuck = S.batches.filter(b=>b.loc==="doctors" && b.qty>0.0001);
+  if(stuck.length){
+    stuck.forEach(b=>{ addBatch("apteka", b.itemId, b.qty, b.price, b.expiry, b.src); b.qty = 0; });
+    S.batches = S.batches.filter(b=>b.qty>0.0001);
+    log("Система", `Лікарі більше не зберігають медикаменти: ${stuck.length} партій повернуто на склад аптеки`);
+  }
+  S.requests.filter(r=>r.status==="pending" && r.from==="doctors").forEach(r=>{
+    r.status = "cancelled"; r.closed = Date.now();
+    log("Система", `Заявку ${r.no} скасовано: лікарі тепер користуються рецептами`);
+  });
+}
+let saveT=null;
+function save(){
+  clearTimeout(saveT);
+  saveT = setTimeout(async ()=>{
+    try{ await window.storage.set(SKEY, JSON.stringify(S)); }
+    catch(e){ console.warn("Не вдалось зберегти:", e); }
+  }, 250);
+}
+function log(type, text, extra, as){
+  const who = as || (typeof ME!=="undefined" && ME ? {loc:ME.loc, name:ME.name} : {loc:S.role, name:"Система"});
+  S.log.unshift({id:uid("l"), ts:Date.now(), actor:who.loc, user:who.name, type, text, extra:extra||null});
+  if(S.log.length>1500) S.log.length=1500;
+}
+
+/* ---------- позиції та партії ---------- */
+function findItem(name, nomen, unit){
+  const key = (nomen||"").trim().toLowerCase();
+  let it = key ? S.items.find(i => (i.nomen||"").toLowerCase() === key) : null;
+  if(!it) it = S.items.find(i => i.name.trim().toLowerCase() === String(name).trim().toLowerCase());
+  if(it){
+    if(nomen && !it.nomen) it.nomen = nomen;
+    if(unit && !it.unit) it.unit = unit;
+    return it;
+  }
+  it = {id:uid("i"), name:String(name).trim(), nomen:(nomen||"").trim(), unit:(unit||"шт").trim()};
+  S.items.push(it);
+  return it;
+}
+const item = id => S.items.find(i=>i.id===id) || {name:"— видалено —", nomen:"", unit:""};
+const atLoc = loc => S.batches.filter(b => b.loc===loc && b.qty > 0.0001);
+function avail(loc, itemId){ return atLoc(loc).filter(b=>b.itemId===itemId).reduce((s,b)=>s+b.qty,0); }
+function stockRows(loc){
+  const m = new Map();
+  atLoc(loc).forEach(b=>{
+    if(!m.has(b.itemId)) m.set(b.itemId, {itemId:b.itemId, qty:0, sum:0, batches:[]});
+    const r = m.get(b.itemId);
+    r.qty += b.qty; r.sum += b.qty*(b.price||0); r.batches.push(b);
+  });
+  const rows = [...m.values()];
+  rows.forEach(r=>{
+    r.batches.sort((a,b)=> (dparse(a.expiry)||9e15) - (dparse(b.expiry)||9e15));
+    r.nearest = r.batches[0] ? r.batches[0].expiry : null;
+    r.item = item(r.itemId);
+  });
+  rows.sort((a,b)=> a.item.name.localeCompare(b.item.name,"uk"));
+  return rows;
+}
+function addBatch(loc, itemId, q, price, expiry, src){
+  const same = S.batches.find(b => b.loc===loc && b.itemId===itemId && (b.expiry||"")===(expiry||"") && Math.abs((b.price||0)-(price||0))<0.005);
+  if(same){ same.qty += q; return same; }
+  const b = {id:uid("b"), loc, itemId, qty:q, price:price||0, expiry:expiry||"", src:src||"", at:Date.now()};
+  S.batches.push(b); return b;
+}
+/* FEFO: спершу те, що швидше спливає */
+function takeFEFO(loc, itemId, need){
+  const src = atLoc(loc).filter(b=>b.itemId===itemId)
+    .sort((a,b)=> (dparse(a.expiry)||9e15) - (dparse(b.expiry)||9e15));
+  const taken = []; let left = need;
+  for(const b of src){
+    if(left <= 0.0001) break;
+    const t = Math.min(b.qty, left);
+    b.qty = Math.round((b.qty - t)*1000)/1000; left -= t;
+    taken.push({price:b.price, expiry:b.expiry, qty:t, src:b.src});
+  }
+  S.batches = S.batches.filter(b=>b.qty>0.0001);
+  return {taken, short: Math.round(left*1000)/1000};
+}
+
+/* ---------- заявки ---------- */
+const pending = () => S.requests.filter(r=>r.status==="pending");
+const pendingFor = loc => pending().filter(r=>r.to===loc);
+function canOrder(loc){ return !!LOCS[loc].supplier; }
+
+/* ======================= ДЕМОНСТРАЦІЙНІ ДАНІ ======================= */
+function seed(){
+  const plus = n => { const d=today(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+  const rows = [
+    ["Натрію хлорид 0,9% 200 мл","2831.00.1","фл",120,42.50,plus(420)],
+    ["Натрію хлорид 0,9% 200 мл","2831.00.1","фл",40,44.10,plus(58)],
+    ["Парацетамол 500 мг, табл.","3004.90.2","уп",90,31.20,plus(240)],
+    ["Ібупрофен 400 мг, табл.","3004.90.7","уп",60,48.75,plus(15)],
+    ["Цефтріаксон 1 г, порошок","3004.20.1","фл",75,63.00,plus(300)],
+    ["Бинт марлевий 7м х 14см","3005.90.4","шт",300,18.40,plus(900)],
+    ["Джгут кровоспинний","9018.90.8","шт",45,210.00,""],
+    ["Розчин Рінгера 400 мл","3004.90.9","фл",50,68.30,plus(-12)],
+    ["Дексаметазон 4 мг/мл","3004.32.0","амп",200,14.90,plus(75)],
+    ["Аміодарон 150 мг/3 мл","3004.90.3","амп",40,52.60,plus(120)]
+  ];
+  rows.forEach(r=>{ const it=findItem(r[0],r[1],r[2]); addBatch("apteka", it.id, r[3], r[4], r[5], "НК-001 демо"); });
+  // трохи залишків на підрозділах
+  const give = (loc, name, q, from) => { const it=S.items.find(i=>i.name===name); if(it){ const t=takeFEFO(from||"apteka",it.id,q); t.taken.forEach(x=>addBatch(loc,it.id,x.qty,x.price,x.expiry,x.src)); } };
+  give("senior","Натрію хлорид 0,9% 200 мл",30);
+  give("senior","Парацетамол 500 мг, табл.",20);
+  give("senior","Дексаметазон 4 мг/мл",50);
+  give("post","Парацетамол 500 мг, табл.",6,"senior");
+  give("senior","Бинт марлевий 7м х 14см",40); give("post","Бинт марлевий 7м х 14см",25,"senior");
+  give("feldsher","Джгут кровоспинний",10);
+  // приклад заявки в очікуванні
+  const it1 = S.items.find(i=>i.name.startsWith("Бинт"));
+  const it2 = S.items.find(i=>i.name.startsWith("Цефтріаксон"));
+  S.requests.push({
+    id:uid("r"), no:"З-" + String(++S.req).padStart(4,"0"), from:"feldsher", to:"apteka",
+    status:"pending", created:Date.now()-3600e3*7, note:"Поповнення укладки",
+    lines:[{itemId:it1.id, want:60, got:0},{itemId:it2.id, want:10, got:0}]
+  });
+  const it3 = S.items.find(i=>i.name.startsWith("Цефтріаксон"));
+  const it4 = S.items.find(i=>i.name.startsWith("Ібупрофен"));
+  S.rx.push({id:uid("x"), no:"Р-"+String(++S.rxNo).padStart(4,"0"), docLoc:"doctors", doctor:"Черговий лікар",
+    patient:"Шевченко І. М.", comment:"Позалікарняна пневмонія, курс 5 діб",
+    status:"pending", created:Date.now()-3600e3*2,
+    lines:[{itemId:it3.id, want:5, got:0},{itemId:it4.id, want:1, got:0}]});
+  S.inv = 1;
+  log("Рецепт", `Виписано рецепт ${S.rx[0].no}, пацієнт ${S.rx[0].patient}: ${S.rx[0].lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`,
+      null, {loc:"doctors", name:"Черговий лікар"});
+  log("Система","Створено демонстраційну базу: 10 позицій на складі Аптеки");
+}
+
+/* ======================= АУТЕНТИФІКАЦІЯ ======================= */
+const SESS = "medcrm:sess";
+const SESS_TTL = 12*3600e3;          // сесія живе 12 годин
+const START_PASS = "medchastyna";    // стартовий пароль, змінюється при першому вході
+const MIN_PASS = 6;
+let ME = null;                       // поточний користувач
+let authPick = null, authErr = "", fails = {};
+
+async function sha(txt){
+  try{
+    const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+    return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  }catch(e){ // запасний варіант, якщо crypto.subtle недоступний
+    let h = 5381; for(let i=0;i<txt.length;i++) h = ((h*33) ^ txt.charCodeAt(i)) >>> 0;
+    return "fallback:" + h.toString(16) + ":" + txt.length;
+  }
+}
+const hash = (pass, salt) => sha(salt + "::" + pass);
+
+async function mkUser(loc, name, login, pass, admin, must){
+  const salt = uid("s");
+  return {id:uid("u"), loc, name, login:login.trim().toLowerCase(), salt,
+          pass: await hash(pass, salt), admin:!!admin, must:!!must, active:true, last:null};
+}
+async function ensureUsers(){
+  if(S.users && S.users.length) return;
+  S.users = [];
+  const defs = [
+    ["apteka",  "Завідувач аптеки",       "apteka",   true],
+    ["senior",  "Старша медсестра",       "senior",   false],
+    ["feldsher","Фельдшер",               "feldsher", false],
+    ["doctors", "Черговий лікар",         "doctors",  false],
+    ["post",    "Медсестра поста",        "post",     false]
+  ];
+  for(const d of defs) S.users.push(await mkUser(d[0], d[1], d[2], START_PASS, d[3], true));
+}
+const usersAt = loc => (S.users||[]).filter(u=>u.loc===loc && u.active);
+const initials = n => n.split(/\s+/).slice(0,2).map(w=>w[0]||"").join("").toUpperCase();
+
+async function saveSess(){ try{ await window.storage.set(SESS, JSON.stringify({uid:ME.id, at:Date.now()})); }catch(e){} }
+async function loadSess(){
+  try{
+    const r = await window.storage.get(SESS);
+    if(!r || !r.value) return;
+    const s = JSON.parse(r.value);
+    if(Date.now() - s.at > SESS_TTL) return;
+    const u = (S.users||[]).find(x=>x.id===s.uid && x.active);
+    if(u){ ME = u; S.role = u.loc; }
+  }catch(e){}
+}
+async function logout(){
+  if(ME) log("Доступ", "Вихід із системи");
+  ME = null; authPick = null; authErr = "";
+  try{ await window.storage.delete(SESS); }catch(e){}
+  save(); render();
+}
+
+/* ---------- екран входу ---------- */
+function renderAuth(){
+  document.getElementById("app").hidden = true;
+  const a = document.getElementById("auth");
+  a.hidden = false;
+  const fresh = (S.users||[]).every(u=>u.must);
+
+  a.innerHTML = `<div class="auth">
+    <div class="auth-side">
+      <div>
+        <div class="cross"></div>
+        <h1>Медична<br>частина</h1>
+        <p>Облік і рух медикаментів: аптека, підрозділи, заявки.</p>
+      </div>
+      <div class="note">Доступ надається за підрозділом. Кожна операція записується в журнал під іменем користувача, який її виконав.</div>
+    </div>
+    <div class="auth-main">
+      <h2>Вхід у систему</h2>
+      <p class="lede">Оберіть свій підрозділ і введіть пароль.</p>
+      <div class="units">
+        ${ORDER.map(id=>{
+          const n = usersAt(id).length;
+          return `<button class="unit ${authPick===id?"on":""}" data-u="${id}" ${n?"":"disabled"}>
+            <span class="code">${LOCS[id].short}</span>
+            <b>${LOCS[id].name}</b>
+            <span>${n? n+" обл. запис"+(n===1?"":n<5?"и":"ів") : "немає доступу"}</span>
+          </button>`;
+        }).join("")}
+      </div>
+      <div id="auth-form"></div>
+      ${fresh? `<div class="auth-tip">Перший запуск: усі підрозділи мають стартовий пароль <code>${START_PASS}</code>. Система попросить змінити його одразу після входу.</div>`:""}
+    </div>
+  </div>`;
+
+  a.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>{ authPick=b.dataset.u; authErr=""; renderAuth(); setTimeout(()=>{const p=document.getElementById("pw"); p&&p.focus();},20); });
+
+  if(!authPick){ document.getElementById("auth-form").innerHTML = ""; return; }
+
+  const list = usersAt(authPick);
+  document.getElementById("auth-form").innerHTML = `<div class="auth-form">
+    ${authErr? `<div class="auth-err">${esc(authErr)}</div>`:""}
+    <div class="row" style="align-items:flex-end">
+      <div class="field" style="flex:1;min-width:220px"><label>Обліковий запис</label>
+        <select id="acc">${list.map(u=>`<option value="${u.id}">${esc(u.name)} (${esc(u.login)})${u.admin?" · адміністратор":""}</option>`).join("")}</select></div>
+      <div class="field" style="flex:1;min-width:200px"><label>Пароль</label>
+        <input type="password" id="pw" autocomplete="current-password"></div>
+      <button class="btn primary" id="go" style="height:37px">Увійти</button>
+    </div>
+    <p class="sub2" style="margin:12px 0 0">Пароль забуто — зверніться до завідувача аптеки: він скидає паролі у розділі «Керування доступом».</p>
+  </div>`;
+  const go = () => tryLogin(document.getElementById("acc").value, document.getElementById("pw").value);
+  document.getElementById("go").onclick = go;
+  document.getElementById("pw").onkeydown = e => { if(e.key==="Enter") go(); };
+}
+
+async function tryLogin(id, pass){
+  const u = (S.users||[]).find(x=>x.id===id);
+  if(!u || !u.active){ authErr = "Обліковий запис недоступний."; return renderAuth(); }
+  const f = fails[u.id] || {n:0, until:0};
+  if(Date.now() < f.until){
+    authErr = "Забагато невдалих спроб. Спробуйте за " + Math.ceil((f.until-Date.now())/1000) + " с.";
+    return renderAuth();
+  }
+  if(!pass){ authErr = "Введіть пароль."; return renderAuth(); }
+  const h = await hash(pass, u.salt);
+  if(h !== u.pass){
+    f.n++;
+    if(f.n >= 5){ f.until = Date.now() + 60000; f.n = 0; }
+    fails[u.id] = f;
+    log("Доступ", `Невдала спроба входу: ${u.name}`, null, {loc:u.loc, name:u.name});
+    authErr = f.until > Date.now() ? "Пароль невірний. Вхід заблоковано на 60 секунд." : "Пароль невірний. Залишилось спроб: " + (5 - f.n) + ".";
+    save(); return renderAuth();
+  }
+  fails[u.id] = {n:0, until:0};
+  ME = u; S.role = u.loc; u.last = Date.now();
+  log("Доступ", "Вхід у систему");
+  await saveSess();
+  authErr = ""; authPick = null;
+  render();
+  if(u.must) changePassModal(true);
+}
+
+/* ---------- зміна власного пароля ---------- */
+function changePassModal(forced){
+  modal(forced ? "Змініть стартовий пароль" : "Зміна пароля", `
+    ${forced? `<p class="sub2" style="margin-top:0">Стартовий пароль однаковий для всіх підрозділів. Щоб журнал операцій мав сенс, задайте власний.</p>`:""}
+    <div class="grid g2">
+      ${forced? "" : `<div class="field" style="grid-column:1/-1"><label>Поточний пароль</label><input type="password" id="p0"></div>`}
+      <div class="field"><label>Новий пароль (від ${MIN_PASS} символів)</label><input type="password" id="p1"></div>
+      <div class="field"><label>Повторіть новий пароль</label><input type="password" id="p2"></div>
+    </div>`,
+    [ ...(forced?[]:[{t:"Скасувати", f:close}]),
+      {t:"Зберегти пароль", cls:"primary", f:async ()=>{
+        if(!forced){
+          const cur = document.getElementById("p0").value;
+          if(await hash(cur, ME.salt) !== ME.pass) return toast("Поточний пароль невірний", true);
+        }
+        const p1 = document.getElementById("p1").value, p2 = document.getElementById("p2").value;
+        if(p1.length < MIN_PASS) return toast("Пароль має містити щонайменше " + MIN_PASS + " символів", true);
+        if(p1 !== p2) return toast("Паролі не збігаються", true);
+        if(p1 === START_PASS) return toast("Цей пароль стартовий — оберіть інший", true);
+        ME.salt = uid("s"); ME.pass = await hash(p1, ME.salt); ME.must = false;
+        log("Доступ", "Пароль змінено");
+        close(); toast("Пароль оновлено"); render();
+      }}],
+    {noclose: !!forced});
+}
+
+/* ---------- керування доступом (лише адміністратор) ---------- */
+function usersModal(){
+  if(!ME.admin) return;
+  const draw = () => {
+    const rows = (S.users||[]).slice().sort((a,b)=> ORDER.indexOf(a.loc)-ORDER.indexOf(b.loc) || a.name.localeCompare(b.name,"uk"));
+    return `<div class="tw" style="max-height:340px"><table><thead><tr>
+        <th>Підрозділ</th><th>Користувач</th><th>Логін</th><th>Останній вхід</th><th>Стан</th><th></th></tr></thead><tbody>
+      ${rows.map(u=>`<tr>
+        <td><span class="tag">${LOCS[u.loc].short}</span> ${LOCS[u.loc].name}</td>
+        <td class="name">${esc(u.name)}${u.admin?` <span class="tag acc">адмін</span>`:""}</td>
+        <td class="mono sub2">${esc(u.login)}</td>
+        <td class="mono sub2">${u.last? dtstr(u.last) : "—"}</td>
+        <td>${u.must? `<span class="tag warn"><span class="dot"></span>стартовий пароль</span>`
+              : u.active? `<span class="tag ok"><span class="dot"></span>активний</span>`
+              : `<span class="tag crit"><span class="dot"></span>вимкнений</span>`}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="btn sm" data-reset="${u.id}">Скинути пароль</button>
+          ${u.id===ME.id? "" : `<button class="btn sm ${u.active?"danger":""}" data-tog="${u.id}">${u.active?"Вимкнути":"Увімкнути"}</button>`}
+        </td></tr>`).join("")}
+    </tbody></table></div>`;
+  };
+  modal("Керування доступом", `<div id="ulist">${draw()}</div>
+    <div class="card" style="margin-top:16px"><header><h3>Новий обліковий запис</h3></header><div class="pad">
+      <div class="grid g2">
+        <div class="field"><label>Підрозділ</label><select id="n-loc">${ORDER.map(l=>`<option value="${l}">${LOCS[l].name}</option>`).join("")}</select></div>
+        <div class="field"><label>Прізвище та ініціали</label><input type="text" id="n-name" placeholder="Коваленко О. П."></div>
+        <div class="field"><label>Логін</label><input type="text" id="n-login" placeholder="kovalenko"></div>
+        <div class="field"><label>Стартовий пароль</label><input type="text" id="n-pass" value="${START_PASS}"></div>
+        <label style="grid-column:1/-1;display:flex;gap:8px;align-items:center;font-size:13px">
+          <input type="checkbox" id="n-adm" style="width:auto"> Права адміністратора: керування доступом і очищення бази</label>
+      </div>
+      <button class="btn primary" id="n-add" style="margin-top:12px">Створити запис</button>
+    </div></div>`,
+    [{t:"Закрити", f:()=>{close(); render();}}]);
+
+  const rebind = () => {
+    document.getElementById("ulist").innerHTML = draw();
+    document.querySelectorAll("[data-reset]").forEach(b=>b.onclick=async ()=>{
+      const u = S.users.find(x=>x.id===b.dataset.reset);
+      u.salt = uid("s"); u.pass = await hash(START_PASS, u.salt); u.must = true; u.active = true;
+      log("Доступ", `Скинуто пароль користувачу ${u.name} (${LOCS[u.loc].name})`);
+      toast("Пароль скинуто на стартовий"); save(); rebind();
+    });
+    document.querySelectorAll("[data-tog]").forEach(b=>b.onclick=()=>{
+      const u = S.users.find(x=>x.id===b.dataset.tog);
+      if(u.active && u.admin && S.users.filter(x=>x.admin && x.active).length <= 1)
+        return toast("Це єдиний активний адміністратор — спершу призначте іншого", true);
+      u.active = !u.active;
+      log("Доступ", `${u.active?"Увімкнено":"Вимкнено"} доступ: ${u.name} (${LOCS[u.loc].name})`);
+      toast(u.active?"Доступ увімкнено":"Доступ вимкнено"); save(); rebind();
+    });
+  };
+  rebind();
+
+  document.getElementById("n-add").onclick = async ()=>{
+    const name = document.getElementById("n-name").value.trim();
+    const login = document.getElementById("n-login").value.trim().toLowerCase();
+    const pass = document.getElementById("n-pass").value;
+    if(!name) return toast("Вкажіть прізвище та ініціали", true);
+    if(!/^[a-z0-9._-]{3,}$/.test(login)) return toast("Логін: щонайменше 3 символи, латиниця, цифри, крапка або дефіс", true);
+    if(S.users.some(u=>u.login===login)) return toast("Такий логін уже існує", true);
+    if(pass.length < 4) return toast("Стартовий пароль закороткий", true);
+    const u = await mkUser(document.getElementById("n-loc").value, name, login, pass, document.getElementById("n-adm").checked, true);
+    S.users.push(u);
+    log("Доступ", `Створено обліковий запис ${u.name} (${LOCS[u.loc].name}), логін ${u.login}`);
+    document.getElementById("n-name").value = ""; document.getElementById("n-login").value = "";
+    toast("Обліковий запис створено"); save(); rebind();
+  };
+}
+
+/* ======================= РЕНДЕР ======================= */
+const $ = s => document.querySelector(s);
+const TABS = [
+  {id:"dash",   n:"Дашборд"},
+  {id:"apteka", n:"Аптека"},
+  {id:"units",  n:"Підрозділи"},
+  {id:"req",    n:"Заявки"},
+  {id:"hist",   n:"Історія"}
+];
+const TITLES = {
+  dash:["Дашборд","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
+  apteka:["Аптека","Основний склад: партії на залишках і каталог препаратів"],
+  units:["Підрозділи","Медикаменти на руках у підрозділів: кількість, партії та терміни придатності"],
+  req:["Заявки","Заявки від підрозділів та історія їх виконання"],
+  hist:["Історія","Повний журнал маніпуляцій у системі"]
+};
+
+function toast(msg, bad){
+  const t = document.createElement("div");
+  t.className = "toast" + (bad?" bad":"");
+  t.textContent = msg;
+  $("#toast").append(t);
+  setTimeout(()=>t.remove(), 3600);
+}
+
+function render(){
+  if(!ME) return renderAuth();
+  document.getElementById("auth").hidden = true;
+  document.getElementById("app").hidden = false;
+
+  // навігація
+  const inbox = pendingFor(S.role).length;
+  $("#nav").innerHTML = TABS.map((t,i)=>
+    `<button data-tab="${t.id}" class="${tab===t.id?"on":""}">
+       <span class="idx">${String(i+1).padStart(2,"0")}</span>${t.n}
+       ${t.id==="req" && inbox ? `<span class="badge">${inbox}</span>`:""}
+     </button>`).join("");
+  $("#nav").querySelectorAll("button").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render();window.scrollTo(0,0)});
+
+  // профіль
+  const L = LOCS[S.role];
+  $("#meBox").innerHTML = `
+    <div class="me">
+      <div class="av">${esc(initials(ME.name))}</div>
+      <div class="who"><b>${esc(ME.name)}</b><span>${LOCS[ME.loc].name}${ME.admin?" · адмін":""}</span></div>
+    </div>
+    <p class="hint" style="margin:0 0 10px">${L.kind==="prescriber" ? "Виписує рецепти — аптека видає препарат і одразу списує його з обліку"
+        : L.supplier ? "Замовляє медикаменти в: " + LOCS[L.supplier].name : "Приймає накладні, видає за заявками та рецептами"}</p>
+    <div class="me-acts">
+      <button id="mePass">Змінити пароль</button>
+      ${ME.admin? `<button id="meUsers">Доступ</button>`:""}
+      <button id="meOut">Вийти</button>
+    </div>`;
+  $("#mePass").onclick = ()=>changePassModal(false);
+  if(ME.admin) $("#meUsers").onclick = usersModal;
+  $("#meOut").onclick = ()=>{
+    modal("Вихід із системи", `<p style="margin:0">Завершити сеанс для «${esc(ME.name)}»? Незбережених даних немає — усі операції вже записані.</p>`,
+      [{t:"Залишитись", f:close},{t:"Вийти", cls:"danger", f:()=>{close(); logout();}}]);
+  };
+
+  $("#ttl").textContent = TITLES[tab][0];
+  $("#sub").textContent = TITLES[tab][1];
+  $("#actions").innerHTML = "";
+  $("#view").innerHTML = "";
+
+  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, hist:viewHist})[tab]();
+  save();
+}
+
+/* ---------- заголовкові кнопки ---------- */
+function act(html, fn){
+  const b = document.createElement("button");
+  b.className = "btn"; b.innerHTML = html;
+  b.onclick = fn; $("#actions").append(b); return b;
+}
+
+/* =========== ВКЛАДКА 1: ДАШБОРД =========== */
+function viewDash(){
+  const wh = stockRows("apteka");
+  const all = S.batches.filter(b=>b.qty>0.0001);
+  const value = all.reduce((s,b)=>s+b.qty*(b.price||0),0);
+  const exp = all.filter(b=>shelf(b.expiry).k==="expired");
+  const crit = all.filter(b=>["critical"].includes(shelf(b.expiry).k));
+  const soon = all.filter(b=>shelf(b.expiry).k==="soon");
+  const p = pending();
+  const rx = rxPending();
+
+  const v = $("#view");
+  v.insertAdjacentHTML("beforeend", `
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="stat acc"><div class="eyebrow">Склад аптеки</div><div class="v">${wh.length}</div><div class="n">позицій на залишках · ${qty(wh.reduce((s,r)=>s+r.qty,0))} од.</div></div>
+      <div class="stat ok"><div class="eyebrow">Балансова вартість</div><div class="v">${money(value)}</div><div class="n">грн у всіх підрозділах</div></div>
+      <div class="stat ${(p.length+rx.length)?"warn":""}"><div class="eyebrow">Черга на видачу</div><div class="v">${p.length} / ${rx.length}</div><div class="n">${p.length} заявок · ${rx.length} рецептів</div></div>
+      <div class="stat ${exp.length?"crit":(crit.length?"warn":"ok")}"><div class="eyebrow">Термін придатності</div><div class="v">${exp.length + crit.length}</div><div class="n">${exp.length} прострочено · ${crit.length} спливає ≤30 дн · ${soon.length} ≤90 дн</div></div>
+    </div>`);
+
+  ribbon(v, all);
+
+  v.insertAdjacentHTML("beforeend", `<div class="split" style="margin-top:14px">
+    <div id="d-exp"></div><div id="d-side"></div></div>`);
+
+  /* спливає термін придатності */
+  const risky = all.filter(b=>["expired","critical","soon"].includes(shelf(b.expiry).k))
+    .sort((a,b)=>(dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15));
+  $("#d-exp").innerHTML = `<div class="card"><header><h3>Спливає термін придатності</h3>
+      <span class="spacer"></span><span class="eyebrow">${risky.length} партій</span></header>
+    ${risky.length ? `<div class="tw"><table><thead><tr>
+        <th>Препарат</th><th>Де</th><th class="num">К-сть</th><th>Придатний до</th><th>Стан</th></tr></thead><tbody>
+      ${risky.map(b=>{const s=shelf(b.expiry);return `<tr>
+        <td><div class="name">${esc(item(b.itemId).name)}</div><div class="sub2 mono">${esc(item(b.itemId).nomen||"—")}</div></td>
+        <td><span class="tag">${LOCS[b.loc].short}</span></td>
+        <td class="num">${qty(b.qty)} ${esc(item(b.itemId).unit)}</td>
+        <td class="mono">${dstr(b.expiry)}</td>
+        <td><span class="tag ${s.cls}"><span class="dot"></span>${s.label}</span></td></tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>Усе в межах норми</strong>Жодна партія не спливає найближчі 90 днів.</div>`}
+  </div>`;
+
+  /* залишки на посту + залишки поточного підрозділу + заявки */
+  const postRows = stockRows("post");
+  const mine = S.role!=="post" ? stockRows(S.role) : [];
+  $("#d-side").innerHTML = `
+    <div class="card" style="margin-bottom:14px"><header><h3>Залишок на посту медсестри</h3>
+      <span class="spacer"></span><span class="eyebrow">${postRows.length} поз.</span></header>
+      ${postRows.length ? `<div class="tw" style="max-height:250px"><table><thead><tr><th>Препарат</th><th class="num">Залишок</th><th>До</th></tr></thead><tbody>
+        ${postRows.map(r=>{const s=shelf(r.nearest);return `<tr><td>${esc(r.item.name)}</td>
+          <td class="num">${qty(r.qty)} ${esc(r.item.unit)}</td>
+          <td class="mono" style="color:${SHELF_COLOR[s.k]}">${dstr(r.nearest)}</td></tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>Пост порожній</strong>Замовте медикаменти у старшої медсестри.</div>`}
+    </div>
+    ${LOCS[S.role].kind==="unit" ? `<div class="card" style="margin-bottom:14px"><header><h3>Мої залишки — ${LOCS[S.role].name}</h3></header>
+      ${mine.length?`<div class="tw" style="max-height:220px"><table><thead><tr><th>Препарат</th><th class="num">К-сть</th></tr></thead><tbody>
+        ${mine.map(r=>`<tr><td>${esc(r.item.name)}</td><td class="num">${qty(r.qty)} ${esc(r.item.unit)}</td></tr>`).join("")}
+      </tbody></table></div>`:`<div class="empty"><strong>Залишків немає</strong>Створіть заявку у вкладці «Заявки».</div>`}
+    </div>`:""}
+    <div class="card" style="margin-bottom:14px"><header><h3>Рецепти в очікуванні</h3></header>
+      ${rx.length ? rx.map(r=>`<div style="padding:12px 16px;border-bottom:1px solid var(--line)">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div><span class="mono" style="font-weight:600">${r.no}</span>
+              <div class="sub2">пацієнт ${esc(r.patient)} · ${esc(r.doctor)} · ${dtstr(r.created)}</div></div>
+            <span class="tag warn">${r.lines.length} преп.</span>
+          </div></div>`).join("")
+        : `<div class="empty"><strong>Рецептів немає</strong>Лікарі не мають невиданих призначень.</div>`}
+    </div>
+    <div class="card"><header><h3>Заявки в очікуванні</h3></header>
+      ${p.length ? p.map(r=>`<div style="padding:12px 16px;border-bottom:1px solid var(--line)">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div><span class="mono" style="font-weight:600">${r.no}</span>
+              <div class="sub2">${LOCS[r.from].name} → ${LOCS[r.to].name} · ${dtstr(r.created)}</div></div>
+            <span class="tag acc">${r.lines.length} поз.</span>
+          </div></div>`).join("")
+        : `<div class="empty"><strong>Черга порожня</strong>Нових заявок немає.</div>`}
+    </div>`;
+}
+
+/* ---------- ПІДПИС: стрічка придатності ---------- */
+function ribbon(root, batches){
+  const W=1000, H=170, y0=126;
+  const list = batches.filter(b=>daysLeft(b.expiry)!==null)
+    .map(b=>({b, d:Math.max(-45, Math.min(760, daysLeft(b.expiry)))}));
+  const X = d => 46 + (Math.sqrt(Math.max(d,-45)+45) / Math.sqrt(805)) * (W-86);
+  const maxQ = Math.max(1, ...list.map(x=>x.b.qty));
+  const marks = [0,30,90,180,365,730];
+
+  const ticks = list.map(x=>{
+    const s = shelf(x.b.expiry), c = SHELF_COLOR[s.k];
+    const h = 10 + Math.sqrt(x.b.qty/maxQ)*74;
+    const w = 3.2;
+    const it = item(x.b.itemId);
+    const tip = `${it.name} · ${qty(x.b.qty)} ${it.unit} · ${LOCS[x.b.loc].name} · до ${dstr(x.b.expiry)}`;
+    return `<g class="tick" data-tip="${esc(tip)}"><rect x="${(X(x.d)-w/2).toFixed(1)}" y="${(y0-h).toFixed(1)}" width="${w}" height="${h.toFixed(1)}" rx="1" fill="${c}" opacity=".85"><title>${esc(tip)}</title></rect></g>`;
+  }).join("");
+
+  root.insertAdjacentHTML("beforeend", `
+  <div class="ribbon">
+    <div class="head">
+      <h3 style="font-size:14px">Стрічка придатності</h3>
+      <span class="eyebrow">кожна риска — партія, висота = кількість</span>
+      <div class="legend">
+        <span><i style="background:${SHELF_COLOR.expired}"></i>прострочено</span>
+        <span><i style="background:${SHELF_COLOR.critical}"></i>до 30 дн</span>
+        <span><i style="background:${SHELF_COLOR.soon}"></i>до 90 дн</span>
+        <span><i style="background:${SHELF_COLOR.ok}"></i>придатні</span>
+      </div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Розподіл партій за терміном придатності">
+      <line x1="0" y1="${y0}" x2="${W}" y2="${y0}" stroke="#B9C3B2"/>
+      ${marks.map(m=>`<g><line x1="${X(m).toFixed(1)}" y1="24" x2="${X(m).toFixed(1)}" y2="${y0}" stroke="#E1E7DC"/>
+        <text x="${X(m).toFixed(1)}" y="${y0+18}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#909B94">${m===0?"сьогодні":m+" дн"}</text></g>`).join("")}
+      <line x1="${X(0).toFixed(1)}" y1="18" x2="${X(0).toFixed(1)}" y2="${y0}" stroke="#9E2430" stroke-dasharray="3 3"/>
+      ${ticks || `<text x="${W/2}" y="80" text-anchor="middle" font-size="13" fill="#909B94" font-family="IBM Plex Sans">Партій із зазначеним терміном придатності немає</text>`}
+    </svg>
+    <div class="readout" id="ribbon-out"><span class="eyebrow">наведіть на риску</span></div>
+  </div>`);
+
+  const out = $("#ribbon-out");
+  root.querySelectorAll(".tick").forEach(g=>{
+    g.addEventListener("mouseenter", ()=> out.textContent = g.dataset.tip);
+    g.addEventListener("mouseleave", ()=> out.innerHTML = `<span class="eyebrow">наведіть на риску</span>`);
+  });
+}
+
+/* =========== ВКЛАДКА 2: АПТЕКА =========== */
+function viewApteka(){
+  if(S.role==="apteka"){
+    act("Завантажити накладну", importModal).classList.add("primary");
+    act("Додати вручну", ()=>manualModal());
+  }
+  act("Експорт залишків", exportStock);
+
+  const v = $("#view");
+  v.insertAdjacentHTML("beforeend", `<div class="row" style="margin-bottom:14px">
+    <div class="seg">
+      <button data-s="stock" class="${sub.apteka==="stock"?"on":""}">Залишки на складі</button>
+      <button data-s="cat" class="${sub.apteka==="cat"?"on":""}">Каталог препаратів</button>
+    </div>
+    <input type="text" id="q" placeholder="Пошук за назвою або номенклатурним номером" style="max-width:340px" value="${esc(sub.apteka==="stock"?flt.stock:flt.cat)}">
+  </div><div id="body"></div>`);
+  v.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{sub.apteka=b.dataset.s;render()});
+  $("#q").oninput = e => { if(sub.apteka==="stock") flt.stock=e.target.value; else flt.cat=e.target.value; body(); };
+
+  body();
+  function body(){
+    sub.apteka==="stock" ? stockView() : catView();
+  }
+
+  function stockView(){
+    const q = flt.stock.trim().toLowerCase();
+    const rows = stockRows("apteka").filter(r=> !q || r.item.name.toLowerCase().includes(q) || (r.item.nomen||"").toLowerCase().includes(q));
+    const total = rows.reduce((s,r)=>s+r.sum,0);
+    $("#body").innerHTML = `<div class="card"><header><h3>Основний склад — Аптека</h3>
+      <span class="spacer"></span><span class="eyebrow">${rows.length} позицій · ${money(total)} грн</span></header>
+      ${rows.length? `<div class="tw"><table><thead><tr>
+        <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th><th class="num">Ціна, грн</th><th class="num">Сума, грн</th><th>Найближчий термін</th><th>Партії</th></tr></thead><tbody>
+        ${rows.map(r=>{const s=shelf(r.nearest); const price=r.qty?r.sum/r.qty:0; return `<tr>
+          <td class="name">${esc(r.item.name)}</td>
+          <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
+          <td>${esc(r.item.unit)}</td>
+          <td class="num" style="font-weight:600">${qty(r.qty)}</td>
+          <td class="num">${money(price)}</td>
+          <td class="num">${money(r.sum)}</td>
+          <td><span class="tag ${s.cls}"><span class="dot"></span>${dstr(r.nearest)}</span></td>
+          <td><button class="btn sm" data-b="${r.itemId}">${r.batches.length} парт.</button></td></tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>Склад порожній</strong>Завантажте накладну Excel, щоб оприбуткувати медикаменти.</div>`}
+    </div>`;
+    $("#body").querySelectorAll("[data-b]").forEach(b=>b.onclick=()=>batchModal("apteka", b.dataset.b));
+  }
+
+  function catView(){
+    const q = flt.cat.trim().toLowerCase();
+    const list = S.items.filter(i=> !q || i.name.toLowerCase().includes(q) || (i.nomen||"").toLowerCase().includes(q))
+      .sort((a,b)=>a.name.localeCompare(b.name,"uk"));
+    $("#body").innerHTML = `<div class="card"><header><h3>Каталог препаратів</h3><span class="spacer"></span>
+      <span class="eyebrow">${list.length} найменувань</span></header>
+      ${list.length? `<div class="tw"><table><thead><tr><th>Найменування</th><th>Ном. номер</th><th>Од.</th>
+        ${STOCK.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}<th class="num">Разом</th></tr></thead><tbody>
+        ${list.map(i=>{const per=STOCK.map(l=>avail(l,i.id)); const tot=per.reduce((a,b)=>a+b,0); return `<tr>
+          <td class="name">${esc(i.name)}</td><td class="mono sub2">${esc(i.nomen||"—")}</td><td>${esc(i.unit)}</td>
+          ${per.map(x=>`<td class="num" style="${x?"":"color:var(--faint)"}">${x?qty(x):"—"}</td>`).join("")}
+          <td class="num" style="font-weight:600">${qty(tot)}</td></tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>Каталог порожній</strong>Найменування додаються автоматично під час оприбуткування.</div>`}
+    </div>`;
+  }
+}
+
+function batchModal(loc, itemId){
+  const it = item(itemId);
+  const bs = atLoc(loc).filter(b=>b.itemId===itemId).sort((a,b)=>(dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15));
+  modal(`Партії — ${esc(it.name)}`, `<div class="tw"><table><thead><tr>
+      <th>Придатний до</th><th class="num">К-сть</th><th class="num">Ціна</th><th>Джерело</th><th>Стан</th></tr></thead><tbody>
+      ${bs.map(b=>{const s=shelf(b.expiry);return `<tr><td class="mono">${dstr(b.expiry)}</td>
+        <td class="num">${qty(b.qty)} ${esc(it.unit)}</td><td class="num">${money(b.price)}</td>
+        <td class="sub2">${esc(b.src||"—")}</td>
+        <td><span class="tag ${s.cls}"><span class="dot"></span>${s.label}</span></td></tr>`}).join("")}
+    </tbody></table></div>`,
+    [{t:"Списати з залишку", cls:"danger", f:()=>{close(); writeOffModal(loc, itemId);}},{t:"Закрити", f:close}]);
+}
+
+function writeOffModal(loc, itemId){
+  const it = item(itemId), have = avail(loc, itemId);
+  modal("Списання з залишку", `
+    <div class="grid g2">
+      <div class="field"><label>Препарат</label><input type="text" value="${esc(it.name)}" disabled></div>
+      <div class="field"><label>Доступно</label><input type="text" value="${qty(have)} ${esc(it.unit)}" disabled></div>
+      <div class="field"><label>Кількість до списання</label><input type="number" id="wq" min="0" step="any" value=""></div>
+      <div class="field"><label>Підстава</label><input type="text" id="wr" placeholder="Використано / прострочено / бій"></div>
+    </div>`,
+    [{t:"Скасувати", f:close},{t:"Списати", cls:"danger", f:()=>{
+      const q = parseFloat($("#wq").value)||0, reason = $("#wr").value.trim() || "не вказано";
+      if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
+      if(q>have+0.0001) return toast("Списати можна не більше ніж " + qty(have), true);
+      takeFEFO(loc, itemId, q);
+      log("Списання", `${LOCS[loc].name}: списано ${qty(q)} ${it.unit} «${it.name}» — ${reason}`);
+      close(); toast("Списано " + qty(q) + " " + it.unit); render();
+    }}]);
+}
+
+/* ---------- імпорт накладної ---------- */
+const HEAD = {
+  name:["назва","найменування","препарат","номенклатура","товар"],
+  nomen:["номенклатурний","ном. номер","номер","код","артикул"],
+  unit:["одиниц","од.","од вим","міра"],
+  qty:["кількість","к-сть","кіл-ть","кол-во"],
+  price:["ціна","вартість за","ціна за"],
+  exp:["термін","придатн","придатний до","до"]
+};
+function mapCols(header){
+  const m = {};
+  header.forEach((h,i)=>{
+    const s = String(h||"").toLowerCase().trim();
+    for(const k in HEAD){ if(m[k]==null && HEAD[k].some(x=>s.includes(x))) m[k]=i; }
+  });
+  return m;
+}
+function xlDate(v){
+  if(v==null || v==="") return "";
+  if(v instanceof Date) return v.toISOString().slice(0,10);
+  if(typeof v === "number"){ const d = new Date(Date.UTC(1899,11,30) - 0 + v*86400000); return isNaN(d)?"":d.toISOString().slice(0,10); }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})$/);
+  if(m){ let y=+m[3]; if(y<100) y+=2000; return new Date(Date.UTC(y,+m[2]-1,+m[1])).toISOString().slice(0,10); }
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if(m) return new Date(Date.UTC(+m[1],+m[2]-1,+m[3])).toISOString().slice(0,10);
+  m = s.match(/^(\d{1,2})[.\/-](\d{4})$/); // місяць.рік → останній день місяця
+  if(m) return new Date(Date.UTC(+m[2], +m[1], 0)).toISOString().slice(0,10);
+  const d = new Date(s); return isNaN(d)?"":d.toISOString().slice(0,10);
+}
+const num = v => { if(typeof v==="number") return v; const n = parseFloat(String(v==null?"":v).replace(/\s/g,"").replace(",",".")); return isNaN(n)?0:n; };
+
+function importModal(){
+  modal("Завантаження накладної", `
+    <div class="field" style="margin-bottom:14px;max-width:300px"><label>Номер / назва накладної</label>
+      <input type="text" id="invno" value="НК-${String((S.inv||0)+1).padStart(3,"0")} від ${dstr(new Date())}"></div>
+    <div class="drop" id="drop">
+      <strong>Перетягніть файл Excel або натисніть, щоб вибрати</strong>
+      <span>Підтримується .xlsx, .xls і .csv. Колонки: назва препарату, номенклатурний номер, одиниця виміру, кількість, ціна за одиницю, термін придатності</span>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div style="margin-top:12px"><button class="btn sm" id="tpl">Завантажити шаблон накладної</button></div>
+    <div id="prev" style="margin-top:14px"></div>`,
+    [{t:"Закрити", f:close}]);
+
+  const drop = $("#drop"), file = $("#file");
+  drop.onclick = ()=>file.click();
+  drop.ondragover = e=>{e.preventDefault();drop.classList.add("over")};
+  drop.ondragleave = ()=>drop.classList.remove("over");
+  drop.ondrop = e=>{e.preventDefault();drop.classList.remove("over"); if(e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);};
+  file.onchange = e=>{ if(e.target.files[0]) read(e.target.files[0]); };
+  $("#tpl").onclick = template;
+
+  function read(f){
+    const fr = new FileReader();
+    fr.onload = ev=>{
+      try{
+        const wb = XLSX.read(ev.target.result, {type:"array", cellDates:true});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const aoa = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:""});
+        parse(aoa, f.name);
+      }catch(err){ toast("Не вдалося прочитати файл: " + err.message, true); }
+    };
+    fr.readAsArrayBuffer(f);
+  }
+  function parse(aoa, fname){
+    let hi = -1, map = null;
+    for(let i=0;i<Math.min(aoa.length,15);i++){
+      const m = mapCols(aoa[i]);
+      if(m.name!=null && m.qty!=null){ hi=i; map=m; break; }
+    }
+    if(hi<0){ $("#prev").innerHTML = `<div class="empty"><strong>Не знайдено заголовки</strong>Потрібні щонайменше колонки «Назва препарату» та «Кількість».</div>`; return; }
+    const rows = [];
+    for(let i=hi+1;i<aoa.length;i++){
+      const r = aoa[i]; if(!r) continue;
+      const name = String(r[map.name]||"").trim();
+      if(!name) continue;
+      const q = num(r[map.qty]); if(q<=0) continue;
+      rows.push({
+        name,
+        nomen: map.nomen!=null ? String(r[map.nomen]||"").trim() : "",
+        unit:  map.unit!=null  ? String(r[map.unit]||"").trim() || "шт" : "шт",
+        qty:q,
+        price: map.price!=null ? num(r[map.price]) : 0,
+        exp:   map.exp!=null   ? xlDate(r[map.exp]) : ""
+      });
+    }
+    if(!rows.length){ $("#prev").innerHTML = `<div class="empty"><strong>Рядків не знайдено</strong>Перевірте, що під заголовками є дані з кількістю більшою за нуль.</div>`; return; }
+    const sum = rows.reduce((s,r)=>s+r.qty*r.price,0);
+    $("#prev").innerHTML = `<div class="card"><header><h3>Перевірка: ${rows.length} рядків · ${money(sum)} грн</h3>
+        <span class="spacer"></span><span class="eyebrow">${esc(fname)}</span></header>
+      <div class="tw" style="max-height:280px"><table><thead><tr><th>Назва</th><th>Ном.</th><th>Од.</th><th class="num">К-сть</th><th class="num">Ціна</th><th>Придатний до</th></tr></thead><tbody>
+        ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td class="mono sub2">${esc(r.nomen||"—")}</td><td>${esc(r.unit)}</td>
+          <td class="num">${qty(r.qty)}</td><td class="num">${money(r.price)}</td>
+          <td class="mono" ${r.exp?"":'style="color:var(--crit)"'}>${r.exp?dstr(r.exp):"не розпізнано"}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="pad"><button class="btn primary" id="commit">Оприбуткувати ${rows.length} рядків</button></div></div>`;
+    $("#commit").onclick = ()=>{
+      const inv = $("#invno").value.trim() || "без номера";
+      rows.forEach(r=>{ const it = findItem(r.name, r.nomen, r.unit); addBatch("apteka", it.id, r.qty, r.price, r.exp, inv); });
+      S.inv = (S.inv||0)+1;
+      log("Надходження", `Накладна ${inv}: оприбутковано ${rows.length} позицій на суму ${money(sum)} грн`, {inv, count:rows.length, sum});
+      close(); toast("Накладну оприбутковано: " + rows.length + " позицій"); render();
+    };
+  }
+  function template(){
+    const aoa = [
+      ["Назва препарату","Номенклатурний номер","Одиниця виміру","Кількість","Ціна за одиницю","Термін придатності"],
+      ["Натрію хлорид 0,9% 200 мл","2831.00.1","фл",100,42.5,"31.12.2027"],
+      ["Парацетамол 500 мг, табл.","3004.90.2","уп",50,31.2,"30.06.2027"]
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Накладна");
+    XLSX.writeFile(wb, "shablon-nakladnoi.xlsx");
+  }
+}
+
+function manualModal(){
+  modal("Оприбуткувати вручну", `<div class="grid g2">
+      <div class="field"><label>Назва препарату</label><input type="text" id="m-name"></div>
+      <div class="field"><label>Номенклатурний номер</label><input type="text" id="m-nom"></div>
+      <div class="field"><label>Одиниця виміру</label><input type="text" id="m-unit" value="шт"></div>
+      <div class="field"><label>Кількість</label><input type="number" id="m-qty" step="any" min="0"></div>
+      <div class="field"><label>Ціна за одиницю, грн</label><input type="number" id="m-price" step="any" min="0"></div>
+      <div class="field"><label>Термін придатності</label><input type="date" id="m-exp"></div>
+      <div class="field" style="grid-column:1/-1"><label>Накладна / підстава</label><input type="text" id="m-src" value="Ручне оприбуткування"></div>
+    </div>`,
+    [{t:"Скасувати", f:close},{t:"Оприбуткувати", cls:"primary", f:()=>{
+      const name = $("#m-name").value.trim(), q = parseFloat($("#m-qty").value)||0;
+      if(!name) return toast("Вкажіть назву препарату", true);
+      if(q<=0) return toast("Кількість має бути більшою за нуль", true);
+      const it = findItem(name, $("#m-nom").value, $("#m-unit").value);
+      addBatch("apteka", it.id, q, parseFloat($("#m-price").value)||0, $("#m-exp").value, $("#m-src").value.trim());
+      log("Надходження", `Оприбутковано ${qty(q)} ${it.unit} «${it.name}»`);
+      close(); toast("Оприбутковано"); render();
+    }}]);
+}
+
+function exportStock(){
+  const aoa = [["Підрозділ","Назва препарату","Номенклатурний номер","Одиниця виміру","Кількість","Ціна за одиницю","Сума","Термін придатності","Стан"]];
+  STOCK.forEach(loc=>{
+    atLoc(loc).sort((a,b)=>item(a.itemId).name.localeCompare(item(b.itemId).name,"uk")).forEach(b=>{
+      const it = item(b.itemId), s = shelf(b.expiry);
+      aoa.push([LOCS[loc].name, it.name, it.nomen, it.unit, b.qty, b.price, Math.round(b.qty*b.price*100)/100, b.expiry?dstr(b.expiry):"", s.label]);
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Залишки");
+  XLSX.writeFile(wb, "zalyshky-" + new Date().toISOString().slice(0,10) + ".xlsx");
+  log("Система", "Вивантажено звіт про залишки");
+  toast("Файл сформовано");
+}
+
+/* =========== ВКЛАДКА 3: ПІДРОЗДІЛИ =========== */
+const UNITS = STOCK.filter(l=>l!=="apteka");   // СМС, ФЕЛ, ПМС
+function visibleUnits(){
+  if(ME.admin || ME.loc==="apteka") return UNITS;
+  if(ME.loc==="senior") return ["senior","post"];   // старша медсестра відповідає за пост
+  if(ME.loc==="post")   return ["post","senior"];
+  if(LOCS[ME.loc].kind==="prescriber") return [];
+  return [ME.loc];
+}
+function unitSummary(loc){
+  const rows = stockRows(loc);
+  const bs = atLoc(loc);
+  return {
+    loc, rows,
+    pos: rows.length,
+    qty: rows.reduce((s,r)=>s+r.qty,0),
+    sum: rows.reduce((s,r)=>s+r.sum,0),
+    bad: bs.filter(b=>["expired","critical"].includes(shelf(b.expiry).k)).length,
+    soon: bs.filter(b=>shelf(b.expiry).k==="soon").length
+  };
+}
+
+function viewUnits(){
+  const vis = visibleUnits();
+  if(!vis.length){
+    $("#view").innerHTML = `<div class="card"><div class="empty">
+      <strong>Лікарі не зберігають медикаменти на залишках</strong>
+      Препарати видає аптека за рецептом і одразу списує з обліку. Виписати рецепт — у вкладці «Заявки».</div></div>`;
+    return;
+  }
+  if(!vis.includes(sub.units)) sub.units = vis[0];
+  const cur = sub.units;
+  const canEdit = ME.admin || ME.loc===cur || (ME.loc==="senior" && cur==="post");
+
+  act("Експорт по підрозділу", ()=>exportUnit(cur));
+
+  const v = $("#view");
+
+  /* картки підрозділів */
+  v.insertAdjacentHTML("beforeend", `<div class="grid g4" style="margin-bottom:16px">
+    ${vis.map(l=>{const u=unitSummary(l); return `<button class="stat ${cur===l?"acc":""}" data-unit="${l}"
+        style="text-align:left;cursor:pointer;${cur===l?"":"opacity:.82"}">
+        <div class="eyebrow">${LOCS[l].short}${l==="post"?" · підпорядкований СМС":""}</div>
+        <div class="v" style="font-size:22px">${u.pos}<span style="font-size:12px;color:var(--muted);font-weight:400"> поз.</span></div>
+        <div class="n" style="font-weight:500;color:var(--ink)">${LOCS[l].name}</div>
+        <div class="n">${qty(u.qty)} од. · ${money(u.sum)} грн</div>
+        <div class="n" style="margin-top:6px">${u.bad? `<span class="tag crit"><span class="dot"></span>${u.bad} критичних</span>` : u.soon? `<span class="tag warn"><span class="dot"></span>${u.soon} до 90 дн</span>` : `<span class="tag ok"><span class="dot"></span>терміни в нормі</span>`}</div>
+      </button>`}).join("")}
+  </div>
+  <div class="row" style="margin-bottom:14px">
+    <input type="text" id="uq" placeholder="Пошук за назвою або номенклатурним номером" style="max-width:340px" value="${esc(flt.unit)}">
+  </div>
+  <div id="ubody"></div>
+  ${vis.includes("senior") && vis.includes("post") ? `<div id="supply" style="margin-top:16px"></div>`:""}`);
+
+  v.querySelectorAll("[data-unit]").forEach(b=>b.onclick=()=>{sub.units=b.dataset.unit; render();});
+  $("#uq").oninput = e=>{ flt.unit = e.target.value; drawUnit(); };
+  drawUnit();
+  if(vis.includes("senior") && vis.includes("post")) drawSupply();
+
+  /* залишки обраного підрозділу з розбивкою по партіях */
+  function drawUnit(){
+    const q = flt.unit.trim().toLowerCase();
+    const rows = stockRows(cur).filter(r=> !q || r.item.name.toLowerCase().includes(q) || (r.item.nomen||"").toLowerCase().includes(q));
+    const u = unitSummary(cur);
+    $("#ubody").innerHTML = `<div class="card"><header><h3>${LOCS[cur].name} — медикаменти на залишках</h3>
+        <span class="spacer"></span>
+        <span class="eyebrow">${rows.length} позицій · ${qty(u.qty)} од. · ${money(u.sum)} грн</span></header>
+      ${rows.length ? `<div class="tw"><table><thead><tr>
+          <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th>
+          <th>Партії та терміни придатності</th><th class="num">Сума, грн</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
+        ${rows.map(r=>`<tr>
+          <td class="name">${esc(r.item.name)}</td>
+          <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
+          <td>${esc(r.item.unit)}</td>
+          <td class="num" style="font-weight:600">${qty(r.qty)}</td>
+          <td><div style="display:flex;flex-wrap:wrap;gap:5px">
+            ${r.batches.map(b=>{const sh=shelf(b.expiry);return `<span class="tag ${sh.cls}" title="${esc(sh.label)}"><span class="dot"></span>${qty(b.qty)} до ${dstr(b.expiry)}</span>`}).join("")}
+          </div></td>
+          <td class="num">${money(r.sum)}</td>
+          ${canEdit?`<td style="text-align:right"><button class="btn sm" data-off="${r.itemId}">Списати</button></td>`:""}
+        </tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>У підрозділі немає залишків</strong>${
+        LOCS[cur].supplier ? "Медикаменти надходять сюди за заявкою до "+LOCS[LOCS[cur].supplier].name+"." : ""}</div>`}
+    </div>`;
+    $("#ubody").querySelectorAll("[data-off]").forEach(b=>b.onclick=()=>writeOffModal(cur, b.dataset.off));
+  }
+
+  /* ланцюг «старша медсестра → пост» */
+  function drawSupply(){
+    const sr = stockRows("senior"), pr = stockRows("post");
+    const pmap = new Map(pr.map(r=>[r.itemId, r]));
+    const ids = [...new Set([...sr.map(r=>r.itemId), ...pr.map(r=>r.itemId)])];
+    const list = ids.map(id=>{
+      const it = item(id);
+      const s = sr.find(r=>r.itemId===id), p = pmap.get(id);
+      return {it, sq:s?s.qty:0, pq:p?p.qty:0, pExp:p?p.nearest:null, sExp:s?s.nearest:null};
+    }).sort((a,b)=> (a.pq>0?0:1)-(b.pq>0?0:1) || a.it.name.localeCompare(b.it.name,"uk"));
+    const gaps = list.filter(x=>x.pq<=0 && x.sq>0).length;
+
+    $("#supply").innerHTML = `<div class="card"><header><h3>Забезпечення поста медсестри</h3>
+        <span class="spacer"></span><span class="eyebrow">${gaps? gaps+" позицій є у старшої, але немає на посту" : "пост укомплектовано"}</span></header>
+      ${list.length? `<div class="tw" style="max-height:420px"><table><thead><tr>
+          <th>Препарат</th><th class="num">У старшої медсестри</th><th>Термін СМС</th>
+          <th class="num">На посту</th><th>Термін ПМС</th><th>Стан</th></tr></thead><tbody>
+        ${list.map(x=>{const ps=shelf(x.pExp), ss=shelf(x.sExp);
+          const state = x.pq<=0 ? (x.sq>0? `<span class="tag warn"><span class="dot"></span>не видано на пост</span>` : `<span class="tag crit"><span class="dot"></span>немає ніде</span>`)
+                      : ps.k==="expired" ? `<span class="tag crit"><span class="dot"></span>прострочене на посту</span>`
+                      : ps.k==="critical" ? `<span class="tag warn"><span class="dot"></span>термін спливає</span>`
+                      : `<span class="tag ok"><span class="dot"></span>у наявності</span>`;
+          return `<tr>
+            <td class="name">${esc(x.it.name)}<div class="sub2 mono">${esc(x.it.nomen||"—")}</div></td>
+            <td class="num">${x.sq? qty(x.sq)+" "+esc(x.it.unit) : "—"}</td>
+            <td class="mono sub2" style="color:${x.sq?SHELF_COLOR[ss.k]:"var(--faint)"}">${x.sq? dstr(x.sExp):"—"}</td>
+            <td class="num" style="font-weight:600">${x.pq? qty(x.pq)+" "+esc(x.it.unit) : "—"}</td>
+            <td class="mono sub2" style="color:${x.pq?SHELF_COLOR[ps.k]:"var(--faint)"}">${x.pq? dstr(x.pExp):"—"}</td>
+            <td>${state}</td></tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>Залишків немає ні у старшої медсестри, ні на посту</strong>Подайте заявку до аптеки.</div>`}
+    </div>`;
+  }
+}
+
+function exportUnit(loc){
+  const aoa = [["Підрозділ","Назва препарату","Номенклатурний номер","Одиниця виміру","Кількість у партії","Ціна за одиницю","Сума","Термін придатності","Днів до кінця терміну","Стан","Джерело надходження"]];
+  atLoc(loc).sort((a,b)=> item(a.itemId).name.localeCompare(item(b.itemId).name,"uk") || (dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15))
+    .forEach(b=>{
+      const it = item(b.itemId), sh = shelf(b.expiry), d = daysLeft(b.expiry);
+      aoa.push([LOCS[loc].name, it.name, it.nomen, it.unit, b.qty, b.price,
+                Math.round(b.qty*b.price*100)/100, b.expiry?dstr(b.expiry):"", d===null?"":d, sh.label, b.src||""]);
+    });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), LOCS[loc].short);
+  XLSX.writeFile(wb, "pidrozdil-" + LOCS[loc].short.toLowerCase() + "-" + new Date().toISOString().slice(0,10) + ".xlsx");
+  log("Система", `Вивантажено залишки підрозділу ${LOCS[loc].name}`);
+  toast("Файл сформовано");
+}
+
+/* =========== ВКЛАДКА 4: ЗАЯВКИ ТА РЕЦЕПТИ =========== */
+const rxPending = () => (S.rx||[]).filter(r=>r.status==="pending");
+
+function viewReq(){
+  const isDoc = LOCS[S.role].kind==="prescriber";
+  const isPharm = S.role==="apteka";
+  if(isDoc) act("Виписати рецепт", newRxModal).classList.add("primary");
+  else if(canOrder(S.role)) act("Створити заявку", newReqModal).classList.add("primary");
+
+  const pReq = pending(), pRx = rxPending();
+  const doneReq = S.requests.filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
+  const doneRx  = (S.rx||[]).filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
+  if(isDoc && sub.req==="pending") sub.req = "rx";
+  if(!["pending","rx","hist"].includes(sub.req)) sub.req = isDoc ? "rx" : "pending";
+
+  const v = $("#view");
+  v.insertAdjacentHTML("beforeend", `<div class="row" style="margin-bottom:14px"><div class="seg">
+      ${isDoc?"":`<button data-s="pending" class="${sub.req==="pending"?"on":""}">Заявки в очікуванні (${pReq.length})</button>`}
+      <button data-s="rx" class="${sub.req==="rx"?"on":""}">Рецепти в очікуванні (${pRx.length})</button>
+      <button data-s="hist" class="${sub.req==="hist"?"on":""}">Історія</button>
+    </div></div><div id="rbody"></div>`);
+  v.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{sub.req=b.dataset.s;render()});
+
+  if(sub.req==="pending")   drawReq();
+  else if(sub.req==="rx")   drawRx();
+  else                      drawHist();
+
+  /* --- заявки в очікуванні --- */
+  function drawReq(){
+    const inbox = pendingFor(S.role);
+    const mineP = pReq.filter(r=>r.from===S.role);
+    const others = pReq.filter(r=>r.to!==S.role && r.from!==S.role);
+    $("#rbody").innerHTML =
+      block("Надійшли мені — потребують видачі", inbox, true) +
+      block("Мої заявки — очікують видачі", mineP, false) +
+      (others.length && ME.admin ? block("Інші заявки у системі", others, false) : "") +
+      (!pReq.length ? `<div class="card"><div class="empty"><strong>Заявок в очікуванні немає</strong>${
+        canOrder(S.role) ? "Натисніть «Створити заявку», щоб замовити медикаменти в " + LOCS[LOCS[S.role].supplier].name + "." : "Підрозділи ще не подали заявок."}</div></div>` : "");
+    bindReq();
+  }
+  function bindReq(){
+    $("#rbody").querySelectorAll("[data-issue]").forEach(b=>b.onclick=()=>issueModal(b.dataset.issue));
+    $("#rbody").querySelectorAll("[data-rej]").forEach(b=>b.onclick=()=>rejectModal(b.dataset.rej));
+    $("#rbody").querySelectorAll("[data-cancel]").forEach(b=>b.onclick=()=>{
+      const r = S.requests.find(x=>x.id===b.dataset.cancel);
+      r.status="cancelled"; r.closed=Date.now();
+      log("Заявка", `Заявку ${r.no} скасовано підрозділом ${LOCS[r.from].name}`);
+      toast("Заявку скасовано"); render();
+    });
+  }
+  function block(title, list, mayIssue){
+    if(!list.length) return "";
+    return `<div class="card" style="margin-bottom:14px"><header><h3>${title}</h3><span class="spacer"></span>
+        <span class="eyebrow">${list.length}</span></header>
+      ${list.map(r=>{ const src = r.to;
+        return `<div style="padding:14px 16px;border-bottom:1px solid var(--line)">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
+              <span class="tag acc" style="margin-left:8px">${LOCS[r.from].name} → ${LOCS[r.to].name}</span></div>
+            <div class="sub2" style="margin-top:4px">${dtstr(r.created)}${r.by2?" · "+esc(r.by2):""}${r.note?" · "+esc(r.note):""}</div>
+          </div>
+          <div class="row">
+            ${mayIssue? `<button class="btn primary sm" data-issue="${r.id}">Видати</button>
+                         <button class="btn danger sm" data-rej="${r.id}">Відхилити</button>`:""}
+            ${r.from===S.role? `<button class="btn sm" data-cancel="${r.id}">Скасувати</button>`:""}
+          </div>
+        </div>
+        <table style="margin-top:10px"><thead><tr><th>Препарат</th><th class="num">Замовлено</th><th class="num">Є в наявності</th><th></th></tr></thead><tbody>
+          ${r.lines.map(l=>{const it=item(l.itemId); const has=avail(src,l.itemId); const ok=has>=l.want;
+            return `<tr><td>${esc(it.name)}</td><td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+            <td class="num">${qty(has)}</td>
+            <td><span class="tag ${ok?"ok":"warn"}"><span class="dot"></span>${ok?"вистачає":"недостатньо"}</span></td></tr>`}).join("")}
+        </tbody></table></div>`}).join("")}
+    </div>`;
+  }
+
+  /* --- рецепти в очікуванні --- */
+  function drawRx(){
+    const mine = pRx.filter(r=>r.docLoc===S.role);
+    const list = isPharm || ME.admin ? pRx : mine;
+    $("#rbody").innerHTML = list.length ? `<div class="card"><header>
+        <h3>${isPharm||ME.admin ? "Рецепти на видачу" : "Мої рецепти в очікуванні"}</h3>
+        <span class="spacer"></span><span class="eyebrow">${list.length}</span></header>
+      ${list.map(r=>`<div style="padding:15px 16px;border-bottom:1px solid var(--line)">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
+              <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}</span></div>
+            <div class="sub2" style="margin-top:4px">Виписав: ${esc(r.doctor)} · ${dtstr(r.created)}</div>
+            ${r.comment? `<div class="sub2" style="margin-top:4px">Коментар: ${esc(r.comment)}</div>`:""}
+          </div>
+          <div class="row">
+            ${isPharm? `<button class="btn primary sm" data-rxi="${r.id}">Видати за рецептом</button>
+                        <button class="btn danger sm" data-rxr="${r.id}">Відхилити</button>`:""}
+            ${r.docLoc===S.role? `<button class="btn sm" data-rxc="${r.id}">Скасувати</button>`:""}
+          </div>
+        </div>
+        <table style="margin-top:10px"><thead><tr><th>Препарат</th><th class="num">Призначено</th><th class="num">Є в аптеці</th><th></th></tr></thead><tbody>
+          ${r.lines.map(l=>{const it=item(l.itemId); const has=avail("apteka",l.itemId); const ok=has>=l.want;
+            return `<tr><td>${esc(it.name)}<div class="sub2 mono">${esc(it.nomen||"—")}</div></td>
+              <td class="num">${qty(l.want)} ${esc(it.unit)}</td><td class="num">${qty(has)}</td>
+              <td><span class="tag ${ok?"ok":"warn"}"><span class="dot"></span>${ok?"вистачає":"недостатньо"}</span></td></tr>`}).join("")}
+        </tbody></table></div>`).join("")}
+      </div>`
+      : `<div class="card"><div class="empty"><strong>Рецептів в очікуванні немає</strong>${
+          isDoc ? "Натисніть «Виписати рецепт», щоб призначити препарат пацієнту." : "Лікарі ще не виписали рецептів."}</div></div>`;
+    $("#rbody").querySelectorAll("[data-rxi]").forEach(b=>b.onclick=()=>issueRxModal(b.dataset.rxi));
+    $("#rbody").querySelectorAll("[data-rxr]").forEach(b=>b.onclick=()=>rejectRxModal(b.dataset.rxr));
+    $("#rbody").querySelectorAll("[data-rxc]").forEach(b=>b.onclick=()=>{
+      const r = S.rx.find(x=>x.id===b.dataset.rxc);
+      r.status="cancelled"; r.closed=Date.now();
+      log("Рецепт", `Рецепт ${r.no} (пацієнт ${r.patient}) скасовано`);
+      toast("Рецепт скасовано"); render();
+    });
+  }
+
+  /* --- історія --- */
+  function drawHist(){
+    $("#rbody").innerHTML = `
+      <div class="card" style="margin-bottom:14px"><header><h3>Історія рецептів</h3><span class="spacer"></span>
+        <span class="eyebrow">${doneRx.length}</span></header>
+        ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Лікар</th><th>Препарати</th>
+            <th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
+          ${doneRx.map(r=>`<tr><td class="mono">${r.no}</td><td class="name">${esc(r.patient)}</td>
+            <td class="sub2">${esc(r.doctor)}</td>
+            <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`).join("<br>")}</td>
+            <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
+            <td>${statusTag(r)}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty"><strong>Виданих рецептів ще немає</strong>Тут з'являться виконані, частково виконані та відхилені рецепти.</div>`}
+      </div>
+      <div class="card"><header><h3>Історія заявок</h3><span class="spacer"></span>
+        <span class="eyebrow">${doneReq.length}</span></header>
+        ${doneReq.length? `<div class="tw"><table><thead><tr><th>№</th><th>Від</th><th>Кому</th><th>Створено</th><th>Закрито</th>
+            <th class="num">Позицій</th><th>Стан</th><th></th></tr></thead><tbody>
+          ${doneReq.map(r=>`<tr><td class="mono">${r.no}</td><td>${LOCS[r.from].name}</td><td>${LOCS[r.to].name}</td>
+            <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
+            <td class="num">${r.lines.length}</td><td>${statusTag(r)}</td>
+            <td><button class="btn sm" data-view="${r.id}">Деталі</button></td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty"><strong>Історія заявок порожня</strong>Тут з'являться виконані та відхилені заявки.</div>`}
+      </div>`;
+    $("#rbody").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>reqDetails(b.dataset.view));
+  }
+}
+function statusTag(r){
+  const m = {issued:["ok","Видано"], partial:["warn","Видано частково"], rejected:["crit","Відхилено"], cancelled:["","Скасовано"], pending:["acc","В очікуванні"]};
+  const t = m[r.status] || ["","—"];
+  return `<span class="tag ${t[0]}"><span class="dot"></span>${t[1]}</span>`;
+}
+
+/* ---------- виписування рецепта ---------- */
+function newRxModal(){
+  const rows = stockRows("apteka");
+  if(!rows.length) return modal("Рецепт", `<div class="empty"><strong>На складі аптеки немає залишків</strong>Призначати поки нічого.</div>`, [{t:"Закрити", f:close}]);
+  let lines = [];
+  modal("Рецепт на видачу препарату", `
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="field"><label>ПІБ пацієнта</label><input type="text" id="rx-pat" placeholder="Шевченко І. М."></div>
+      <div class="field"><label>Лікар</label><input type="text" value="${esc(ME.name)}" disabled></div>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <div class="field" style="flex:1;min-width:250px"><label>Препарат (є в аптеці)</label>
+        <select id="rx-pick">${rows.map(r=>`<option value="${r.itemId}">${esc(r.item.name)} — ${qty(r.qty)} ${esc(r.item.unit)}</option>`).join("")}</select></div>
+      <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
+      <button class="btn" id="rx-add">Додати до рецепта</button>
+    </div>
+    <div id="rx-lines"></div>
+    <div class="field" style="margin-top:12px"><label>Коментар</label>
+      <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
+    <p class="sub2" style="margin:10px 0 0">Після видачі препарат списується з обліку одразу — на лікарів залишок не переноситься.</p>`,
+    [{t:"Скасувати", f:close},{t:"Виписати рецепт", cls:"primary", f:submit}]);
+
+  const draw = ()=>{
+    $("#rx-lines").innerHTML = lines.length ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Є в аптеці</th><th></th></tr></thead><tbody>
+      ${lines.map((l,i)=>{const it=item(l.itemId); const has=avail("apteka",l.itemId); return `<tr>
+        <td>${esc(it.name)}</td><td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+        <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
+        <td style="text-align:right"><button class="btn sm danger" data-del="${i}">Прибрати</button></td></tr>`}).join("")}
+      </tbody></table>` : `<div class="empty" style="padding:20px"><strong>Рецепт порожній</strong>Оберіть препарат і додайте його до рецепта.</div>`;
+    $("#rx-lines").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{lines.splice(+b.dataset.del,1);draw()});
+  };
+  draw();
+  $("#rx-add").onclick = ()=>{
+    const id = $("#rx-pick").value, q = parseFloat($("#rx-q").value)||0;
+    if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
+    const ex = lines.find(l=>l.itemId===id);
+    if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
+    draw();
+  };
+  function submit(){
+    const pat = $("#rx-pat").value.trim();
+    if(!pat) return toast("Вкажіть ПІБ пацієнта", true);
+    if(!lines.length) return toast("Додайте хоча б один препарат", true);
+    const r = {id:uid("x"), no:"Р-"+String(++S.rxNo).padStart(4,"0"), docLoc:S.role, doctor:ME.name,
+      patient:pat, comment:$("#rx-com").value.trim(), status:"pending", created:Date.now(),
+      lines:lines.map(l=>({itemId:l.itemId, want:l.want, got:0}))};
+    (S.rx = S.rx||[]).push(r);
+    log("Рецепт", `Виписано рецепт ${r.no}, пацієнт ${pat}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no});
+    close(); toast("Рецепт " + r.no + " передано в аптеку"); render();
+  }
+}
+
+/* ---------- видача за рецептом зі списанням ---------- */
+function issueRxModal(id){
+  const r = S.rx.find(x=>x.id===id);
+  modal(`Видача за рецептом ${r.no}`, `
+    <div class="grid g3" style="margin-bottom:14px">
+      <div><div class="eyebrow">Пацієнт</div><div class="name">${esc(r.patient)}</div></div>
+      <div><div class="eyebrow">Лікар</div><div>${esc(r.doctor)}</div></div>
+      <div><div class="eyebrow">Виписано</div><div class="mono">${dtstr(r.created)}</div></div>
+    </div>
+    ${r.comment? `<p class="sub2" style="margin-top:0">Коментар лікаря: ${esc(r.comment)}</p>`:""}
+    <table class="lines"><thead><tr><th>Препарат</th><th class="num">Призначено</th><th class="num">Є</th><th class="num">Видати</th><th>Партії (FEFO)</th></tr></thead><tbody>
+    ${r.lines.map((l,i)=>{const it=item(l.itemId); const has=avail("apteka",l.itemId); const give=Math.min(l.want,has);
+      const bs = atLoc("apteka").filter(b=>b.itemId===l.itemId).sort((a,b)=>(dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15)).slice(0,2);
+      return `<tr><td>${esc(it.name)}<div class="sub2 mono">${esc(it.nomen||"—")}</div></td>
+        <td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+        <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
+        <td class="num"><input type="number" class="mono" data-rxl="${i}" step="any" min="0" max="${has}" value="${give}" style="width:100px;text-align:right"></td>
+        <td class="sub2 mono">${bs.map(b=>dstr(b.expiry)).join(", ")||"—"}</td></tr>`}).join("")}
+    </tbody></table>
+    <p class="sub2" style="margin-top:12px">Видані препарати списуються зі складу аптеки за принципом FEFO і на жоден підрозділ не зараховуються.</p>`,
+    [{t:"Скасувати", f:close},{t:"Видати та списати", cls:"primary", f:go}]);
+
+  function go(){
+    const give = [...document.querySelectorAll("[data-rxl]")].map(i=>parseFloat(i.value)||0);
+    if(give.every(g=>g<=0)) return toast("Вкажіть кількість хоча б для одного препарату", true);
+    let full = true, parts = [];
+    r.lines.forEach((l,i)=>{
+      const want = Math.min(give[i], avail("apteka", l.itemId));
+      if(want > 0){ takeFEFO("apteka", l.itemId, want); l.got = want; }
+      if((l.got||0) + 0.0001 < l.want) full = false;
+      if(l.got>0) parts.push(`${item(l.itemId).name} — ${qty(l.got)} ${item(l.itemId).unit}`);
+    });
+    r.status = full ? "issued" : "partial";
+    r.closed = Date.now(); r.by = ME.name;
+    log("Видача", `За рецептом ${r.no} (пацієнт ${r.patient}, лікар ${r.doctor}) видано і списано зі складу: ${parts.join("; ") || "нічого"}`, {rx:r.no});
+    close(); toast(full ? "Видано за рецептом і списано" : "Видано частково і списано"); render();
+  }
+}
+function rejectRxModal(id){
+  const r = S.rx.find(x=>x.id===id);
+  modal("Відхилення рецепта " + r.no, `<div class="field"><label>Причина відмови</label>
+      <textarea id="rxr" placeholder="Наприклад: препарату немає на залишках, запропоновано аналог"></textarea></div>`,
+    [{t:"Назад", f:close},{t:"Відхилити рецепт", cls:"danger", f:()=>{
+      const why = $("#rxr").value.trim() || "без пояснення";
+      r.status="rejected"; r.closed=Date.now(); r.reason=why; r.by=ME.name;
+      log("Відмова", `Аптека відхилила рецепт ${r.no} (пацієнт ${r.patient}): ${why}`, {rx:r.no});
+      close(); toast("Рецепт відхилено"); render();
+    }}]);
+}
+
+/* ---------- створення заявки підрозділом ---------- */
+function newReqModal(){
+  const src = LOCS[S.role].supplier;
+  const rows = stockRows(src);
+  if(!rows.length){ return modal("Створення заявки", `<div class="empty"><strong>У ${LOCS[src].name} немає залишків</strong>Замовляти поки нічого.</div>`, [{t:"Закрити", f:close}]); }
+  let lines = [];
+  modal(`Заявка до: ${LOCS[src].name}`, `
+    <div class="row" style="margin-bottom:12px">
+      <div class="field" style="flex:1;min-width:260px"><label>Препарат (доступно в ${LOCS[src].name})</label>
+        <select id="pick">${rows.map(r=>`<option value="${r.itemId}">${esc(r.item.name)} — ${qty(r.qty)} ${esc(r.item.unit)}</option>`).join("")}</select></div>
+      <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="pq" step="any" min="0" value="1"></div>
+      <button class="btn" id="add">Додати в заявку</button>
+    </div>
+    <div id="lines"></div>
+    <div class="field" style="margin-top:12px"><label>Примітка</label><input type="text" id="note" placeholder="Наприклад: поповнення укладки на добове чергування"></div>`,
+    [{t:"Скасувати", f:close},{t:"Подати заявку", cls:"primary", f:submit}]);
+
+  const draw = ()=>{
+    $("#lines").innerHTML = lines.length ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Доступно</th><th></th></tr></thead><tbody>
+      ${lines.map((l,i)=>{const it=item(l.itemId); const has=avail(src,l.itemId); return `<tr>
+        <td>${esc(it.name)}</td><td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+        <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
+        <td style="text-align:right"><button class="btn sm danger" data-del="${i}">Прибрати</button></td></tr>`}).join("")}
+      </tbody></table>` : `<div class="empty" style="padding:20px"><strong>Заявка порожня</strong>Оберіть препарат і додайте його до заявки.</div>`;
+    $("#lines").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{lines.splice(+b.dataset.del,1);draw()});
+  };
+  draw();
+  $("#add").onclick = ()=>{
+    const id = $("#pick").value, q = parseFloat($("#pq").value)||0;
+    if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
+    const ex = lines.find(l=>l.itemId===id);
+    if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
+    draw();
+  };
+  function submit(){
+    if(!lines.length) return toast("Додайте хоча б один препарат", true);
+    const r = {id:uid("r"), no:"З-"+String(++S.req).padStart(4,"0"), from:S.role, to:src, status:"pending",
+      created:Date.now(), by2:ME.name, note:$("#note").value.trim(), lines:lines.map(l=>({itemId:l.itemId, want:l.want, got:0}))};
+    S.requests.push(r);
+    log("Заявка", `${LOCS[S.role].name} подав заявку ${r.no} до ${LOCS[src].name} на ${lines.length} позицій`, {req:r.no});
+    close(); toast("Заявку " + r.no + " подано"); render();
+  }
+}
+
+/* ---------- видача за заявкою ---------- */
+function issueModal(id){
+  const r = S.requests.find(x=>x.id===id);
+  const src = r.to;
+  modal(`Видача за заявкою ${r.no}`, `
+    <div class="sub2" style="margin-bottom:12px">${LOCS[r.from].name} ← ${LOCS[r.to].name} · подано ${dtstr(r.created)}${r.note?" · "+esc(r.note):""}</div>
+    <table class="lines"><thead><tr><th>Препарат</th><th class="num">Замовлено</th><th class="num">Є</th><th class="num">Видати</th><th>Партії (FEFO)</th></tr></thead><tbody>
+    ${r.lines.map((l,i)=>{const it=item(l.itemId); const has=avail(src,l.itemId); const give=Math.min(l.want,has);
+      const bs = atLoc(src).filter(b=>b.itemId===l.itemId).sort((a,b)=>(dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15)).slice(0,2);
+      return `<tr><td>${esc(it.name)}<div class="sub2 mono">${esc(it.nomen||"—")}</div></td>
+        <td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+        <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
+        <td class="num"><input type="number" class="mono" data-i="${i}" step="any" min="0" max="${has}" value="${give}" style="width:100px;text-align:right"></td>
+        <td class="sub2 mono">${bs.map(b=>dstr(b.expiry)).join(", ")||"—"}</td></tr>`}).join("")}
+    </tbody></table>
+    <p class="sub2" style="margin-top:12px">Списання відбувається за принципом FEFO — першими йдуть партії з найближчим терміном придатності.</p>`,
+    [{t:"Скасувати", f:close},{t:"Провести видачу", cls:"primary", f:go}]);
+
+  function go(){
+    const give = [...document.querySelectorAll("[data-i]")].map(i=>parseFloat(i.value)||0);
+    if(give.every(g=>g<=0)) return toast("Вкажіть кількість хоча б для однієї позиції", true);
+    let full = true, parts = [];
+    r.lines.forEach((l,i)=>{
+      const want = Math.min(give[i], avail(src,l.itemId));
+      if(want>0){
+        const {taken} = takeFEFO(src, l.itemId, want);
+        taken.forEach(t=>addBatch(r.from, l.itemId, t.qty, t.price, t.expiry, t.src));
+        l.got = want;
+      }
+      if((l.got||0) + 0.0001 < l.want) full = false;
+      if(l.got>0) parts.push(`${item(l.itemId).name} — ${qty(l.got)} ${item(l.itemId).unit}`);
+    });
+    r.status = full ? "issued" : "partial";
+    r.closed = Date.now(); r.by = S.role;
+    log("Видача", `${LOCS[src].name} → ${LOCS[r.from].name} за заявкою ${r.no}: ${parts.join("; ") || "нічого не видано"}`, {req:r.no});
+    close(); toast(full? "Заявку виконано повністю" : "Заявку виконано частково"); render();
+  }
+}
+function rejectModal(id){
+  const r = S.requests.find(x=>x.id===id);
+  modal("Відхилення заявки " + r.no, `<div class="field"><label>Причина відхилення</label>
+      <textarea id="rr" placeholder="Наприклад: препарату немає на залишках, очікується наступна поставка"></textarea></div>`,
+    [{t:"Назад", f:close},{t:"Відхилити заявку", cls:"danger", f:()=>{
+      const why = $("#rr").value.trim() || "без пояснення";
+      r.status="rejected"; r.closed=Date.now(); r.reason=why; r.by=S.role;
+      log("Відмова", `${LOCS[r.to].name} відхилив заявку ${r.no} від ${LOCS[r.from].name}: ${why}`, {req:r.no});
+      close(); toast("Заявку відхилено"); render();
+    }}]);
+}
+function reqDetails(id){
+  const r = S.requests.find(x=>x.id===id);
+  modal("Заявка " + r.no, `
+    <div class="grid g3" style="margin-bottom:14px">
+      <div><div class="eyebrow">Від</div><div>${LOCS[r.from].name}</div></div>
+      <div><div class="eyebrow">Кому</div><div>${LOCS[r.to].name}</div></div>
+      <div><div class="eyebrow">Стан</div><div>${statusTag(r)}</div></div>
+    </div>
+    ${r.note?`<p class="sub2">Примітка: ${esc(r.note)}</p>`:""}
+    ${r.reason?`<p class="sub2" style="color:var(--crit)">Причина відмови: ${esc(r.reason)}</p>`:""}
+    <table><thead><tr><th>Препарат</th><th class="num">Замовлено</th><th class="num">Видано</th></tr></thead><tbody>
+      ${r.lines.map(l=>{const it=item(l.itemId);return `<tr><td>${esc(it.name)}</td>
+        <td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+        <td class="num" style="color:${l.got>=l.want?"var(--ok)":"var(--warn)"}">${qty(l.got||0)}</td></tr>`}).join("")}
+    </tbody></table>`, [{t:"Закрити", f:close}]);
+}
+
+/* =========== ВКЛАДКА 5: ІСТОРІЯ =========== */
+function viewHist(){
+  act("Експорт журналу", ()=>{
+    const aoa = [["Дата і час","Підрозділ","Користувач","Тип операції","Опис"]];
+    S.log.forEach(l=>aoa.push([dtstr(l.ts), LOCS[l.actor]?LOCS[l.actor].name:l.actor, l.user||"—", l.type, l.text]));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Журнал");
+    XLSX.writeFile(wb, "zhurnal-" + new Date().toISOString().slice(0,10) + ".xlsx");
+    toast("Журнал вивантажено");
+  });
+  if(ME.admin) act("Очистити базу", ()=>{
+    modal("Очищення бази", `<p>Буде видалено всі залишки, заявки, каталог і журнал. Дію не можна скасувати.</p>`,
+      [{t:"Скасувати", f:close},{t:"Видалити все", cls:"danger", f:async ()=>{
+        const keep = S.users; S = blank(); S.users = keep; S.role = ME.loc;
+        log("Система","Базу очищено (облікові записи збережено)"); close(); toast("Базу очищено"); render();
+      }}]);
+  });
+
+  const types = ["all", ...new Set(S.log.map(l=>l.type))];
+  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Доступ":"","Система":""};
+
+  $("#view").innerHTML = `<div class="row" style="margin-bottom:14px">
+      <div class="field" style="width:220px"><label>Тип операції</label>
+        <select id="ht">${types.map(t=>`<option value="${esc(t)}" ${flt.histType===t?"selected":""}>${t==="all"?"Усі операції":esc(t)}</option>`).join("")}</select></div>
+      <div class="field" style="flex:1;max-width:420px"><label>Пошук у журналі</label>
+        <input type="text" id="hq" value="${esc(flt.hist)}" placeholder="Назва препарату, номер заявки, накладна"></div>
+    </div><div id="histCard"></div>`;
+  $("#ht").onchange = e=>{flt.histType=e.target.value; drawLog(); save();};
+  $("#hq").oninput  = e=>{flt.hist=e.target.value; drawLog();};
+  drawLog();
+
+  function drawLog(){
+    const q = flt.hist.trim().toLowerCase();
+    const list = S.log.filter(l=>
+      (flt.histType==="all" || l.type===flt.histType) &&
+      (!q || l.text.toLowerCase().includes(q) || l.type.toLowerCase().includes(q))
+    );
+    $("#histCard").innerHTML = `<div class="card"><header><h3>Журнал маніпуляцій</h3><span class="spacer"></span>
+      <span class="eyebrow">${list.length} із ${S.log.length} записів</span></header>
+      ${list.length? `<div class="tw" style="max-height:none"><table><thead><tr><th style="width:140px">Дата і час</th><th style="width:150px">Підрозділ</th><th style="width:150px">Користувач</th><th style="width:130px">Операція</th><th>Опис</th></tr></thead><tbody>
+        ${list.map(l=>`<tr><td class="mono sub2">${dtstr(l.ts)}</td>
+          <td>${LOCS[l.actor]?LOCS[l.actor].name:esc(l.actor)}</td>
+          <td class="sub2">${esc(l.user||"—")}</td>
+          <td><span class="tag ${TCOL[l.type]||""}"><span class="dot"></span>${esc(l.type)}</span></td>
+          <td>${esc(l.text)}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>Записів не знайдено</strong>Змініть тип операції або пошуковий запит.</div>`}
+    </div>`;
+  }
+}
+
+/* ---------- модалка ---------- */
+function modal(title, body, btns, opts){
+  const noclose = opts && opts.noclose;
+  $("#modal-root").innerHTML = `<div class="scrim"><div class="modal" role="dialog" aria-modal="true">
+    <header><h3>${title}</h3>${noclose?"":`<button class="x" aria-label="Закрити">×</button>`}</header>
+    <div class="body">${body}</div>
+    <footer>${(btns||[]).map((b,i)=>`<button class="btn ${b.cls||""}" data-k="${i}">${b.t}</button>`).join("")}</footer>
+  </div></div>`;
+  if(!noclose){
+    $("#modal-root").querySelector(".x").onclick = close;
+    $("#modal-root").querySelector(".scrim").onclick = e=>{ if(e.target.classList.contains("scrim")) close(); };
+    document.addEventListener("keydown", escClose);
+  }
+  (btns||[]).forEach((b,i)=>{ $(`#modal-root [data-k="${i}"]`).onclick = b.f; });
+}
+function close(){ $("#modal-root").innerHTML=""; document.removeEventListener("keydown", escClose); }
+function escClose(e){ if(e.key==="Escape") close(); }
+
+/* ---------- старт ---------- */
+(async ()=>{ await load(); render(); })();
+</script>

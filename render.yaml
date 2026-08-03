@@ -1,0 +1,27 @@
+# Blueprint для Render: сервіс + база даних одним файлом.
+# Render → New → Blueprint → вкажіть цей репозиторій.
+services:
+  - type: web
+    name: med-crm
+    runtime: node
+    plan: free          # для щоденної роботи змініть на starter (без засинання)
+    region: frankfurt   # найближчий до України регіон
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_PASSWORD
+        sync: false     # Render запитає значення під час створення
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: med-crm-db
+          property: connectionString
+
+databases:
+  - name: med-crm-db
+    plan: free          # безкоштовна база живе 30 днів — перед цим перейдіть на платну
+    region: frankfurt
+    databaseName: medcrm
+    user: medcrm

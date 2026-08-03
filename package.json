@@ -1,0 +1,15 @@
+{
+  "name": "med-crm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CRM медичної частини: облік і рух медикаментів",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development APP_PASSWORD=test1234 node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.11.5"
+  }
+}

@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Медична частина — доступ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Serif:wght@600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#16211C;
+       font-family:"IBM Plex Sans",system-ui,sans-serif;color:#DCE5DE;padding:24px}
+  .box{width:100%;max-width:400px}
+  .cross{width:30px;height:30px;position:relative;margin-bottom:24px}
+  .cross:before,.cross:after{content:"";position:absolute;background:#7FBFA4}
+  .cross:before{left:12px;top:0;width:6px;height:30px}
+  .cross:after{top:12px;left:0;height:6px;width:30px}
+  h1{font-family:"IBM Plex Serif",Georgia,serif;font-size:26px;margin:0 0 8px;color:#F2F7F3;line-height:1.2}
+  p{margin:0 0 26px;color:#8B9C92;font-size:13.5px;line-height:1.55}
+  label{display:block;font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;
+        text-transform:uppercase;color:#6E8578;margin-bottom:7px}
+  input{width:100%;background:#22322A;border:1px solid rgba(255,255,255,.14);color:#EAF2EC;
+        padding:11px 12px;border-radius:3px;font:inherit}
+  input:focus{outline:2px solid #7FBFA4;outline-offset:2px}
+  button{width:100%;margin-top:14px;background:#14624F;border:1px solid #14624F;color:#fff;
+         padding:11px;border-radius:3px;font:inherit;cursor:pointer}
+  button:hover{background:#18755F}
+  button:disabled{opacity:.5;cursor:progress}
+  .err{background:#3A1D20;border:1px solid #6B2C33;color:#F0B9BD;padding:9px 12px;
+       border-radius:3px;font-size:12.5px;margin-top:14px}
+  .foot{margin-top:26px;font-size:11.5px;color:#6E8578;line-height:1.6;
+        border-top:1px solid rgba(255,255,255,.1);padding-top:16px}
+</style>
+
+<div class="box">
+  <div class="cross"></div>
+  <h1>Медична частина</h1>
+  <p>Сторінка закрита паролем частини. Після входу ви оберете свій підрозділ і введете власний пароль.</p>
+
+  <label for="p">Пароль доступу</label>
+  <input type="password" id="p" autocomplete="current-password" autofocus>
+  <button id="go">Увійти</button>
+  <div id="err"></div>
+
+  <div class="foot">Пароль частини видає адміністратор системи. Він спільний для всіх і потрібен лише для того, щоб сторінка не була відкрита сторонім із мережі.</div>
+</div>
+
+<script>
+  const p = document.getElementById("p"), go = document.getElementById("go"), err = document.getElementById("err");
+  const show = m => err.innerHTML = '<div class="err">' + m + '</div>';
+  async function send(){
+    err.innerHTML = ""; go.disabled = true; go.textContent = "Перевіряю…";
+    try{
+      const r = await fetch("/api/gate", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({password: p.value})
+      });
+      if(r.ok){ location.href = "/"; return; }
+      const j = await r.json().catch(()=>({}));
+      show(j.error || "Не вдалося увійти");
+    }catch(e){ show("Сервер недоступний. Спробуйте ще раз за хвилину."); }
+    go.disabled = false; go.textContent = "Увійти"; p.select();
+  }
+  go.onclick = send;
+  p.onkeydown = e => { if(e.key === "Enter") send(); };
+</script>
