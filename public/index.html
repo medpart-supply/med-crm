@@ -408,7 +408,7 @@ const SKEY = "medcrm:v1";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
-let sub = {apteka:"stock", req:"pending", units:"senior"};
+let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds"};
 let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all"};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
@@ -433,7 +433,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], users:[], role:"apteka", inv:0, req:0, rxNo:0};
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], users:[], role:"apteka", inv:0, req:0, rxNo:0};
 }
 async function load(){
   try{
@@ -450,7 +450,7 @@ async function load(){
 }
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
-  ["items","batches","requests","log","rx","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
   if(!S.rx) S.rx = [];
@@ -1195,12 +1195,12 @@ function writeOffModal(loc, itemId){
 
 /* ---------- імпорт накладної ---------- */
 const HEAD = {
-  name:["назва","найменування","препарат","номенклатура","товар"],
+  name:["назва","найменування","препарат","номенклатура","товар","майно"],
   nomen:["номенклатурний","ном. номер","номер","код","артикул"],
-  unit:["одиниц","од.","од вим","міра"],
   qty:["кількість","к-сть","кіл-ть","кол-во"],
-  price:["ціна","вартість за","ціна за"],
-  exp:["термін","придатн","придатний до","до"]
+  price:["ціна","вартість"],
+  unit:["одиниц","од.","од вим","міра"],
+  exp:["термін","придатн","придатний до"]
 };
 function mapCols(header){
   const m = {};
@@ -1396,18 +1396,24 @@ function viewUnits(){
       </button>`}).join("")}
   </div>
   <div class="row" style="margin-bottom:14px">
+    ${cur==="feldsher" ? `<div class="seg">
+        <button data-fs="meds" class="${sub.feld==="meds"?"on":""}">Медикаменти</button>
+        <button data-fs="assets" class="${sub.feld==="assets"?"on":""}">Майно фельдшера</button>
+      </div>`:""}
     <input type="text" id="uq" placeholder="Пошук за назвою або номенклатурним номером" style="max-width:340px" value="${esc(flt.unit)}">
   </div>
   <div id="ubody"></div>
   ${vis.includes("senior") && vis.includes("post") ? `<div id="supply" style="margin-top:16px"></div>`:""}`);
 
   v.querySelectorAll("[data-unit]").forEach(b=>b.onclick=()=>{sub.units=b.dataset.unit; render();});
+  v.querySelectorAll("[data-fs]").forEach(b=>b.onclick=()=>{sub.feld=b.dataset.fs; render();});
   $("#uq").oninput = e=>{ flt.unit = e.target.value; drawUnit(); };
   drawUnit();
   if(vis.includes("senior") && vis.includes("post")) drawSupply();
 
   /* залишки обраного підрозділу з розбивкою по партіях */
   function drawUnit(){
+    if(cur==="feldsher" && sub.feld==="assets") return drawAssets(cur, canEdit);
     const q = flt.unit.trim().toLowerCase();
     const rows = stockRows(cur).filter(r=> !q || r.item.name.toLowerCase().includes(q) || (r.item.nomen||"").toLowerCase().includes(q));
     const u = unitSummary(cur);
@@ -1466,6 +1472,218 @@ function viewUnits(){
       </tbody></table></div>` : `<div class="empty"><strong>Залишків немає ні у старшої медсестри, ні на посту</strong>Подайте заявку до аптеки.</div>`}
     </div>`;
   }
+}
+
+/* =========== МАЙНО ПІДРОЗДІЛУ (фельдшер) =========== */
+const assetsAt = loc => (S.assets||[]).filter(a=>a.loc===loc);
+
+function drawAssets(loc, canEdit){
+  const q = flt.unit.trim().toLowerCase();
+  const all = assetsAt(loc).sort((a,b)=>a.name.localeCompare(b.name,"uk"));
+  const rows = all.filter(a=> !q || a.name.toLowerCase().includes(q) || (a.nomen||"").toLowerCase().includes(q));
+  const sum = all.reduce((s,a)=>s+a.qty*(a.price||0),0);
+
+  $("#ubody").innerHTML = `<div class="card"><header><h3>Майно — ${LOCS[loc].name}</h3>
+      <span class="spacer"></span>
+      <span class="eyebrow" style="margin-right:4px">${all.length} найменувань · ${money(sum)} грн</span>
+      ${canEdit? `<button class="btn sm" id="as-imp">Завантажити з Excel</button>
+                  <button class="btn sm primary" id="as-new">Додати позицію</button>`:""}
+      <button class="btn sm" id="as-exp">Експорт</button></header>
+    ${rows.length? `<div class="tw"><table><thead><tr>
+        <th>Назва майна</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th>
+        <th class="num">Ціна за одиницю, грн</th><th class="num">Сума, грн</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
+      ${rows.map(a=>`<tr>
+        <td class="name">${esc(a.name)}${a.note?`<div class="sub2">${esc(a.note)}</div>`:""}</td>
+        <td class="mono sub2">${esc(a.nomen||"—")}</td>
+        <td>${esc(a.unit)}</td>
+        <td class="num" style="font-weight:600">${qty(a.qty)}</td>
+        <td class="num">${money(a.price)}</td>
+        <td class="num">${money(a.qty*(a.price||0))}</td>
+        ${canEdit? `<td style="white-space:nowrap;text-align:right">
+          <button class="btn sm" data-aed="${a.id}">Змінити</button>
+          <button class="btn sm danger" data-adel="${a.id}">Вилучити</button></td>`:""}
+      </tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty"><strong>${all.length? "Нічого не знайдено" : "Майно ще не внесено"}</strong>${
+      all.length? "Змініть пошуковий запит." : (canEdit? "Завантажте перелік з Excel або додайте позиції по одній." : "Перелік веде фельдшер.")}</div>`}
+  </div>`;
+
+  const b = id => document.getElementById(id);
+  if(canEdit){
+    b("as-imp").onclick = ()=>assetImportModal(loc);
+    b("as-new").onclick = ()=>assetModal(loc, null);
+    $("#ubody").querySelectorAll("[data-aed]").forEach(x=>x.onclick=()=>assetModal(loc, x.dataset.aed));
+    $("#ubody").querySelectorAll("[data-adel]").forEach(x=>x.onclick=()=>assetDelete(loc, x.dataset.adel));
+  }
+  b("as-exp").onclick = ()=>exportAssets(loc);
+}
+
+/* ---------- одна позиція: додавання і редагування ---------- */
+function assetModal(loc, id){
+  const a = id ? (S.assets||[]).find(x=>x.id===id) : null;
+  modal(a ? "Зміна позиції майна" : "Нова позиція майна", `<div class="grid g2">
+      <div class="field" style="grid-column:1/-1"><label>Назва майна</label>
+        <input type="text" id="a-name" value="${a?esc(a.name):""}" placeholder="Ноші санітарні складані"></div>
+      <div class="field"><label>Номенклатурний номер</label>
+        <input type="text" id="a-nom" value="${a?esc(a.nomen||""):""}" placeholder="9018.90.5"></div>
+      <div class="field"><label>Одиниця виміру</label>
+        <input type="text" id="a-unit" value="${a?esc(a.unit):"шт"}"></div>
+      <div class="field"><label>Кількість</label>
+        <input type="number" id="a-qty" step="any" min="0" value="${a?a.qty:""}"></div>
+      <div class="field"><label>Ціна за одиницю, грн</label>
+        <input type="number" id="a-price" step="any" min="0" value="${a?a.price:""}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Примітка</label>
+        <input type="text" id="a-note" value="${a?esc(a.note||""):""}" placeholder="Стан, місце зберігання, інвентарний номер"></div>
+    </div>`,
+    [{t:"Скасувати", f:close},{t:a?"Зберегти зміни":"Додати до переліку", cls:"primary", f:()=>{
+      const name = document.getElementById("a-name").value.trim();
+      const q = parseFloat(document.getElementById("a-qty").value)||0;
+      if(!name) return toast("Вкажіть назву майна", true);
+      if(q <= 0) return toast("Кількість має бути більшою за нуль", true);
+      const data = {
+        name, nomen: document.getElementById("a-nom").value.trim(),
+        unit: document.getElementById("a-unit").value.trim() || "шт",
+        qty: q, price: parseFloat(document.getElementById("a-price").value)||0,
+        note: document.getElementById("a-note").value.trim()
+      };
+      if(a){
+        const was = `${qty(a.qty)} ${a.unit}`;
+        Object.assign(a, data);
+        log("Майно", `${LOCS[loc].name}: змінено «${name}» — ${was} → ${qty(q)} ${data.unit}`);
+        toast("Зміни збережено");
+      }else{
+        (S.assets = S.assets||[]).push(Object.assign({id:uid("a"), loc, at:Date.now()}, data));
+        log("Майно", `${LOCS[loc].name}: додано «${name}» — ${qty(q)} ${data.unit} по ${money(data.price)} грн`);
+        toast("Позицію додано");
+      }
+      close(); render();
+    }}]);
+}
+
+function assetDelete(loc, id){
+  const a = (S.assets||[]).find(x=>x.id===id);
+  if(!a) return;
+  modal("Вилучення з переліку", `<p style="margin:0">Вилучити «${esc(a.name)}» (${qty(a.qty)} ${esc(a.unit)}) з переліку майна ${LOCS[loc].name.toLowerCase()}? Дію буде записано в журнал.</p>`,
+    [{t:"Скасувати", f:close},{t:"Вилучити", cls:"danger", f:()=>{
+      S.assets = S.assets.filter(x=>x.id!==id);
+      log("Майно", `${LOCS[loc].name}: вилучено «${a.name}» — ${qty(a.qty)} ${a.unit}`);
+      close(); toast("Позицію вилучено"); render();
+    }}]);
+}
+
+/* ---------- завантаження переліку з Excel ---------- */
+function assetImportModal(loc){
+  modal("Завантаження переліку майна", `
+    <div class="drop" id="a-drop">
+      <strong>Перетягніть файл Excel або натисніть, щоб вибрати</strong>
+      <span>Підтримується .xlsx, .xls і .csv. Колонки: назва майна, номенклатурний номер, одиниця виміру, кількість, ціна за одиницю</span>
+      <input type="file" id="a-file" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn sm" id="a-tpl">Завантажити шаблон</button>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)">
+        <input type="checkbox" id="a-wipe" style="width:auto"> замінити наявний перелік повністю</label>
+    </div>
+    <div id="a-prev" style="margin-top:14px"></div>`,
+    [{t:"Закрити", f:close}]);
+
+  const drop = document.getElementById("a-drop"), file = document.getElementById("a-file");
+  drop.onclick = ()=>file.click();
+  drop.ondragover = e=>{e.preventDefault(); drop.classList.add("over");};
+  drop.ondragleave = ()=>drop.classList.remove("over");
+  drop.ondrop = e=>{e.preventDefault(); drop.classList.remove("over"); if(e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);};
+  file.onchange = e=>{ if(e.target.files[0]) read(e.target.files[0]); };
+  document.getElementById("a-tpl").onclick = ()=>{
+    const aoa = [
+      ["Назва майна","Номенклатурний номер","Одиниця виміру","Кількість","Ціна за одиницю"],
+      ["Ноші санітарні складані","9018.90.5","шт",4,3850],
+      ["Сумка медична польова","4202.92.1","шт",2,1740]
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Майно");
+    XLSX.writeFile(wb, "shablon-mayna.xlsx");
+  };
+
+  function read(f){
+    const fr = new FileReader();
+    fr.onload = ev=>{
+      try{
+        const wb = XLSX.read(ev.target.result, {type:"array", cellDates:true});
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, raw:true, defval:""});
+        parse(aoa, f.name);
+      }catch(err){ toast("Не вдалося прочитати файл: " + err.message, true); }
+    };
+    fr.readAsArrayBuffer(f);
+  }
+  function parse(aoa, fname){
+    let hi = -1, map = null;
+    for(let i=0;i<Math.min(aoa.length,15);i++){
+      const m = mapCols(aoa[i]);
+      if(m.name!=null && m.qty!=null){ hi=i; map=m; break; }
+    }
+    if(hi < 0){
+      document.getElementById("a-prev").innerHTML = `<div class="empty"><strong>Не знайдено заголовки</strong>Потрібні щонайменше колонки «Назва майна» та «Кількість».</div>`;
+      return;
+    }
+    const rows = [];
+    for(let i=hi+1;i<aoa.length;i++){
+      const r = aoa[i]; if(!r) continue;
+      const name = String(r[map.name]||"").trim();
+      if(!name) continue;
+      const q = num(r[map.qty]); if(q <= 0) continue;
+      rows.push({
+        name,
+        nomen: map.nomen!=null ? String(r[map.nomen]||"").trim() : "",
+        unit:  map.unit!=null  ? (String(r[map.unit]||"").trim() || "шт") : "шт",
+        qty: q,
+        price: map.price!=null ? num(r[map.price]) : 0
+      });
+    }
+    if(!rows.length){
+      document.getElementById("a-prev").innerHTML = `<div class="empty"><strong>Рядків не знайдено</strong>Перевірте, що під заголовками є дані з кількістю більшою за нуль.</div>`;
+      return;
+    }
+    const sum = rows.reduce((s,r)=>s+r.qty*r.price,0);
+    document.getElementById("a-prev").innerHTML = `<div class="card"><header><h3>Перевірка: ${rows.length} позицій · ${money(sum)} грн</h3>
+        <span class="spacer"></span><span class="eyebrow">${esc(fname)}</span></header>
+      <div class="tw" style="max-height:280px"><table><thead><tr><th>Назва майна</th><th>Ном.</th><th>Од.</th>
+        <th class="num">К-сть</th><th class="num">Ціна</th></tr></thead><tbody>
+        ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td class="mono sub2">${esc(r.nomen||"—")}</td><td>${esc(r.unit)}</td>
+          <td class="num">${qty(r.qty)}</td><td class="num">${money(r.price)}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="pad"><button class="btn primary" id="a-commit">Внести ${rows.length} позицій</button></div></div>`;
+
+    document.getElementById("a-commit").onclick = ()=>{
+      const wipe = document.getElementById("a-wipe").checked;
+      S.assets = S.assets || [];
+      if(wipe){
+        const n = assetsAt(loc).length;
+        S.assets = S.assets.filter(a=>a.loc!==loc);
+        if(n) log("Майно", `${LOCS[loc].name}: попередній перелік (${n} позицій) замінено новим`);
+      }
+      let added = 0, merged = 0;
+      rows.forEach(r=>{
+        const key = (r.nomen||"").toLowerCase();
+        const ex = assetsAt(loc).find(a =>
+          (key && (a.nomen||"").toLowerCase()===key) ||
+          (!key && a.name.trim().toLowerCase()===r.name.toLowerCase()));
+        if(ex){ ex.qty += r.qty; if(r.price) ex.price = r.price; merged++; }
+        else { S.assets.push({id:uid("a"), loc, name:r.name, nomen:r.nomen, unit:r.unit, qty:r.qty, price:r.price, note:"", at:Date.now()}); added++; }
+      });
+      log("Майно", `${LOCS[loc].name}: завантажено перелік з файлу — нових позицій ${added}, доповнено ${merged}, на суму ${money(sum)} грн`);
+      close(); toast(`Внесено: ${added} нових, ${merged} доповнено`); render();
+    };
+  }
+}
+
+function exportAssets(loc){
+  const aoa = [["Підрозділ","Назва майна","Номенклатурний номер","Одиниця виміру","Кількість","Ціна за одиницю","Сума","Примітка"]];
+  assetsAt(loc).sort((a,b)=>a.name.localeCompare(b.name,"uk")).forEach(a=>
+    aoa.push([LOCS[loc].name, a.name, a.nomen, a.unit, a.qty, a.price, Math.round(a.qty*(a.price||0)*100)/100, a.note||""]));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Майно");
+  XLSX.writeFile(wb, "mayno-" + LOCS[loc].short.toLowerCase() + "-" + new Date().toISOString().slice(0,10) + ".xlsx");
+  log("Система", `Вивантажено перелік майна: ${LOCS[loc].name}`);
+  toast("Файл сформовано");
 }
 
 function exportUnit(loc){
@@ -1864,7 +2082,7 @@ function viewHist(){
   });
 
   const types = ["all", ...new Set(S.log.map(l=>l.type))];
-  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Доступ":"","Система":""};
+  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Майно":"acc","Доступ":"","Система":""};
 
   $("#view").innerHTML = `<div class="row" style="margin-bottom:14px">
       <div class="field" style="width:220px"><label>Тип операції</label>
