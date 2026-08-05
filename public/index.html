@@ -966,9 +966,11 @@ function render(){
   document.getElementById("auth").hidden = true;
   document.getElementById("app").hidden = false;
 
-  // навігація
+  // навігація: журнал операцій доступний лише адміністратору
+  const tabs = TABS.filter(t => t.id !== "hist" || ME.admin);
+  if(!tabs.some(t => t.id === tab)) tab = "dash";
   const inbox = pendingFor(S.role).length;
-  $("#nav").innerHTML = TABS.map((t,i)=>
+  $("#nav").innerHTML = tabs.map((t,i)=>
     `<button data-tab="${t.id}" class="${tab===t.id?"on":""}">
        <span class="idx">${String(i+1).padStart(2,"0")}</span>${t.n}
        ${t.id==="req" && inbox ? `<span class="badge">${inbox}</span>`:""}
@@ -2168,6 +2170,12 @@ function reqDetails(id){
 
 /* =========== ВКЛАДКА 5: ІСТОРІЯ =========== */
 function viewHist(){
+  if(!ME.admin){
+    $("#view").innerHTML = `<div class="card"><div class="empty">
+      <strong>Журнал операцій доступний лише адміністратору</strong>
+      Повний перелік маніпуляцій у системі веде завідувач аптеки.</div></div>`;
+    return;
+  }
   act("Експорт журналу", ()=>{
     const aoa = [["Дата і час","Підрозділ","Користувач","Тип операції","Опис"]];
     S.log.forEach(l=>aoa.push([dtstr(l.ts), LOCS[l.actor]?LOCS[l.actor].name:l.actor, l.user||"—", l.type, l.text]));
