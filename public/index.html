@@ -695,6 +695,22 @@ const MKH3 = {
   "U78-U88":[["U78","Ендокринні хвороби, розлади харчування та порушення обміну речовин"],["U79","Розлади психіки та поведінки"],["U80","Хвороби нервової системи"],["U82","Хвороби системи кровообігу"],["U83","Хвороби органів дихання"],["U84","Хвороби органів травлення"],["U86","Хвороби опорно-рухового апарату та сполучної тканини"],["U87","Хвороби сечостатевої системи"],["U88","Вроджені вади, деформації та хромосомні аномалії"]],
 };
 
+/* Деталізація (4-й і 5-й знаки) лежить окремим файлом: 10 279 + 7 138 кодів.
+   Вантажимо один раз на вимогу; якщо файлу немає — рівень просто не показується. */
+let MKH4 = null, mkh4State = "idle";
+async function loadMkh4(){
+  if(mkh4State !== "idle") return mkh4State;
+  mkh4State = "loading";
+  try{
+    const r = await fetch("mkh4.json", {credentials:"same-origin"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    MKH4 = await r.json();
+    mkh4State = "ready";
+  }catch(e){ mkh4State = "absent"; }
+  return mkh4State;
+}
+const blockOf = code3 => { for(const c of MKH10){ const b = c.b.find(x => (MKH3[x[0]]||[]).some(r => r[0] === code3)); if(b) return {cls:c.c, clsName:c.n, code:b[0], name:b[1]}; } return null; };
+
 const dxFind = code => { for(const c of MKH10){ const b = c.b.find(x=>x[0]===code); if(b) return {cls:c.c, clsName:c.n, code:b[0], name:b[1]}; } return null; };
 function dxSearch(q){
   q = q.trim().toLowerCase();
@@ -708,7 +724,20 @@ function dxSearch(q){
         out.push({cls:c.c, clsName:c.n, code:b[0], name:b[1], sub:sc[0], subName:sc[1]});
     });
   }));
-  out.sort((a,b) => (a.sub?0:1) - (b.sub?0:1));   // конкретні коди — вище
+  if(MKH4){
+    for(const parent in MKH4){
+      for(const it of MKH4[parent]){
+        if(it[0].toLowerCase().indexOf(q) >= 0 || it[1].toLowerCase().indexOf(q) >= 0){
+          const c3 = it[0].slice(0, 3), b = blockOf(c3);
+          if(!b) continue;
+          const r3 = (MKH3[b.code] || []).find(x => x[0] === c3);
+          out.push(Object.assign({}, b, {sub:c3, subName:r3 ? r3[1] : "", det:it[0], detName:it[1]}));
+        }
+      }
+      if(out.length > 60) break;
+    }
+  }
+  out.sort((a,b) => (b.det?2:b.sub?1:0) - (a.det?2:a.sub?1:0));   // найточніші коди — вище
   return out.slice(0, 10);
 }
 const hasSubs = block => !!(MKH3[block] && MKH3[block].length);
@@ -720,7 +749,10 @@ function inBlock(code, block){
   return (k[0] > lo[0] || (k[0] === lo[0] && k[1] >= lo[1])) &&
          (k[0] < hi[0] || (k[0] === hi[0] && k[1] <= hi[1]));
 }
-const dxLabel = d => !d ? "—" : (d.sub ? d.sub + " · " + d.subName : d.code + " · " + d.name);
+const dxLabel = d => !d ? "—"
+  : d.det ? d.det + " · " + d.detName
+  : d.sub ? d.sub + " · " + d.subName
+  : d.code + " · " + d.name;
 
 const LOCS = {
   apteka:   {id:"apteka",   name:"Аптека",            short:"АПТ", kind:"warehouse", supplier:null,     color:"#14624F"},
@@ -2214,8 +2246,8 @@ function viewReq(){
             <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
               <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}</span></div>
             <div class="sub2" style="margin-top:4px">Виписав: ${esc(r.doctor)} · ${dtstr(r.created)}</div>
-            <div style="margin-top:5px"><span class="tag acc"><span class="mono">${r.dx?esc(r.dx.sub||r.dx.code):"—"}</span></span>
-              <span class="sub2"> ${r.dx?esc(r.dx.sub?(r.dx.subName||"уточнений код"):r.dx.name):"діагноз не вказано"}${
+            <div style="margin-top:5px"><span class="tag acc"><span class="mono">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span></span>
+              <span class="sub2"> ${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||"уточнений код"):r.dx.name)):"діагноз не вказано"}${
                 r.dx&&r.dx.sub?" · блок "+esc(r.dx.code):""}${r.dxNote?" — "+esc(r.dxNote):""}</span></div>
             ${r.comment? `<div class="sub2" style="margin-top:4px">Коментар: ${esc(r.comment)}</div>`:""}
           </div>
@@ -2252,8 +2284,8 @@ function viewReq(){
         ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Лікар</th><th>Препарати</th>
             <th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
           ${doneRx.map(r=>`<tr><td class="mono">${r.no}</td><td class="name">${esc(r.patient)}</td>
-            <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.sub||r.dx.code):"—"}</span>
-              <div class="sub2">${r.dx?esc(r.dx.sub?(r.dx.subName||r.dx.name):r.dx.name):""}</div></td>
+            <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
+              <div class="sub2">${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||r.dx.name):r.dx.name)):""}</div></td>
             <td class="sub2">${esc(r.doctor)}</td>
             <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`).join("<br>")}</td>
             <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
@@ -2326,6 +2358,7 @@ function newRxModal(){
         </div>
         <div class="field" style="margin-top:10px"><label>Підклас — конкретний діагноз</label>
           <div id="rx-subwrap"></div></div>
+        <div id="rx-detwrap"></div>
         <div class="field" style="margin-top:10px"><label>Уточнення діагнозу (необов'язково)</label>
           <input type="text" id="rx-dxnote" placeholder="Наприклад: негоспітальна пневмонія нижньої частки справа"></div>
       </div>
@@ -2346,6 +2379,7 @@ function newRxModal(){
     [{t:"Скасувати", f:close},{t:"Виписати рецепт", cls:"primary", f:submit}]);
 
   attachPicker("rx-find", "rx-pick", rows);
+  loadMkh4().then(()=>{ if(document.getElementById("rx-detwrap")) renderDetail(); });
 
   /* --- вибір діагнозу --- */
   const clsSel = document.getElementById("rx-cls"), blkSel = document.getElementById("rx-blk");
@@ -2363,13 +2397,54 @@ function newRxModal(){
     if(hasSubs(block)){
       w.innerHTML = `<select id="rx-sub"><option value="">— без уточнення до коду —</option>` +
         MKH3[block].map(sc=>`<option value="${sc[0]}" ${pick===sc[0]?"selected":""}>${sc[0]} · ${esc(sc[1])}</option>`).join("") + `</select>`;
-      document.getElementById("rx-sub").onchange = showDx;
+      document.getElementById("rx-sub").onchange = ()=>{ detChain = []; renderDetail(); showDx(); };
     }else{
       w.innerHTML = `<input type="text" id="rx-subman" placeholder="код у межах ${block}, напр. ${block.split("-")[0]}" value="${pick||""}">
         <span class="sub2">Для цього блоку перелік рубрик відсутній — за потреби впишіть код вручну.</span>`;
       document.getElementById("rx-subman").oninput = showDx;
     }
+    renderDetail();
     showDx();
+  }
+  let detChain = [];
+  function detInfo(){
+    let parent = null;
+    const sel = document.getElementById("rx-sub");
+    parent = sel && sel.value ? sel.value : null;
+    let last = null;
+    for(let i = 0; i < detChain.length; i++){
+      if(!parent || !detChain[i] || !MKH4 || !MKH4[parent]) break;
+      const it = MKH4[parent].find(x => x[0] === detChain[i]);
+      if(!it) break;
+      last = {code:it[0], name:it[1]};
+      parent = it[0];
+    }
+    return last;
+  }
+  function renderDetail(){
+    const w = document.getElementById("rx-detwrap");
+    const sel = document.getElementById("rx-sub");
+    const base = sel && sel.value ? sel.value : null;
+    if(!base){ w.innerHTML = ""; return; }
+    if(mkh4State === "loading"){ w.innerHTML = `<p class="sub2" style="margin:8px 0 0">Завантажую деталізацію…</p>`; return; }
+    if(mkh4State !== "ready" || !MKH4[base]){ w.innerHTML = ""; return; }
+    let html = "", cur = base, lvl = 0;
+    while(MKH4[cur] && lvl < 2){
+      const chosen = detChain[lvl] && MKH4[cur].some(x => x[0] === detChain[lvl]) ? detChain[lvl] : "";
+      html += `<div class="field" style="margin-top:10px"><label>${lvl === 0 ? "Деталізація — 4-й знак" : "Уточнення — 5-й знак"}</label>
+        <select data-det="${lvl}"><option value="">— без деталізації —</option>` +
+        MKH4[cur].map(x => `<option value="${x[0]}" ${chosen === x[0] ? "selected" : ""}>${x[0]} · ${esc(x[1])}</option>`).join("") +
+        `</select></div>`;
+      if(!chosen) break;
+      cur = chosen; lvl++;
+    }
+    w.innerHTML = html;
+    w.querySelectorAll("[data-det]").forEach(sl => sl.onchange = ()=>{
+      const i = +sl.dataset.det;
+      detChain = detChain.slice(0, i);
+      if(sl.value) detChain[i] = sl.value;
+      renderDetail(); showDx();
+    });
   }
   function currentDx(){
     if(!blkSel.value) return null;
@@ -2377,7 +2452,9 @@ function newRxModal(){
     const sel = document.getElementById("rx-sub"), man = document.getElementById("rx-subman");
     if(sel && sel.value){
       const sc = MKH3[blkSel.value].find(x=>x[0]===sel.value);
-      return Object.assign({}, d, {sub:sc[0], subName:sc[1]});
+      const base = Object.assign({}, d, {sub:sc[0], subName:sc[1]});
+      const det = detInfo();
+      return det ? Object.assign(base, {det:det.code, detName:det.name}) : base;
     }
     if(man && man.value.trim()){
       const code = man.value.trim().toUpperCase();
@@ -2404,14 +2481,17 @@ function newRxModal(){
     const found = dxSearch(dxq.value);
     dxres.innerHTML = found.length
       ? `<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px">
-          ${found.map(f=>`<button class="btn sm" data-dx="${f.code}" ${f.sub?`data-sub="${f.sub}"`:""} style="text-align:left">
-            <span class="mono" style="color:var(--accent)">${f.sub||f.code}</span> ${esc(f.sub?f.subName:f.name)}
-            <span class="sub2"> — ${f.sub?"блок "+f.code:"клас "+f.cls}</span></button>`).join("")}
+          ${found.map(f=>`<button class="btn sm" data-dx="${f.code}" ${f.sub?`data-sub="${f.sub}"`:""} ${f.det?`data-det="${f.det}"`:""} style="text-align:left">
+            <span class="mono" style="color:var(--accent)">${f.det||f.sub||f.code}</span> ${esc(f.det?f.detName:(f.sub?f.subName:f.name))}
+            <span class="sub2"> — ${f.det?"рубрика "+f.sub:(f.sub?"блок "+f.code:"клас "+f.cls)}</span></button>`).join("")}
         </div>`
       : (dxq.value.trim().length >= 2 ? `<p class="sub2" style="margin:0 0 12px">За цим запитом нічого не знайдено — скористайтесь переліком нижче.</p>` : "");
     dxres.querySelectorAll("[data-dx]").forEach(b=>b.onclick=()=>{
       const d = dxFind(b.dataset.dx);
-      clsSel.value = d.cls; fillBlocks(d.cls, d.code); fillSubs(b.dataset.sub || null);
+      clsSel.value = d.cls; fillBlocks(d.cls, d.code);
+      const dv = b.dataset.det;                       // код 5-го рівня тягне за собою 4-й
+      detChain = dv ? (dv.length > 5 ? [dv.slice(0, 5), dv] : [dv]) : [];
+      fillSubs(b.dataset.sub || null);
       dxq.value = ""; dxres.innerHTML = "";
     });
   };
@@ -2461,9 +2541,9 @@ function issueRxModal(id){
       <div><div class="eyebrow">Виписано</div><div class="mono">${dtstr(r.created)}</div></div>
     </div>
     <div style="margin:-4px 0 12px"><div class="eyebrow">Діагноз за МКХ-10</div>
-      <div><span class="mono" style="color:var(--accent);font-weight:600">${r.dx?esc(r.dx.sub||r.dx.code):"—"}</span>
-        ${r.dx?esc(r.dx.sub?(r.dx.subName||""):r.dx.name):"не вказано"}
-        ${r.dx&&r.dx.sub?`<div class="sub2">блок ${esc(r.dx.code)} · ${esc(r.dx.name)}</div>`:""}
+      <div><span class="mono" style="color:var(--accent);font-weight:600">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
+        ${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||""):r.dx.name)):"не вказано"}
+        ${r.dx&&r.dx.sub?`<div class="sub2">${r.dx.det?"рубрика "+esc(r.dx.sub)+" · "+esc(r.dx.subName)+" · ":""}блок ${esc(r.dx.code)} · ${esc(r.dx.name)}</div>`:""}
         ${r.dxNote?`<div class="sub2">${esc(r.dxNote)}</div>`:""}</div></div>
     ${r.comment? `<p class="sub2" style="margin-top:0">Коментар лікаря: ${esc(r.comment)}</p>`:""}
     <table class="lines"><thead><tr><th>Препарат</th><th class="num">Призначено</th><th class="num">Є</th><th class="num">Видати</th><th>Партії (FEFO)</th></tr></thead><tbody>
