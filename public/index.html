@@ -334,23 +334,32 @@ textarea{resize:vertical;min-height:60px}
     }
   };
 
-  /* Якщо базу змінив інший підрозділ — попереджаємо і перезавантажуємо,
-     але не посеред заповнення форми. */
-  function conflict(){ banner("Дані оновив інший користувач. Сторінку буде перезавантажено, щоб ви бачили актуальні залишки."); }
+  /* Якщо базу змінив інший підрозділ — тихо перечитуємо дані на місці.
+     Перезавантаження сторінки використовується лише як запасний варіант. */
+  var pulling = false;
+  function busy(){
+    var m = document.getElementById("modal-root");
+    return !!(m && m.innerHTML.length);          // не смикаємо екран, поки відкрите вікно
+  }
+  async function pull(){
+    if(pulling || busy()) return;
+    pulling = true;
+    try{
+      if(window.medcrmSync){ await window.medcrmSync(); note("Дані оновив інший користувач — перелік актуалізовано"); }
+      else location.reload();
+    }catch(e){}
+    pulling = false;
+  }
+  function conflict(){ setTimeout(pull, 50); }
 
-  var pending = false;
-  function banner(text){
-    if(pending) return; pending = true;
-    var b = document.createElement("div");
-    b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:999;background:#9A6B0E;color:#fff;" +
-      "padding:11px 16px;font:14px/1.4 'IBM Plex Sans',system-ui,sans-serif;text-align:center";
-    b.textContent = text;
-    document.body.appendChild(b);
-    (function wait(){
-      var busy = document.getElementById("modal-root") && document.getElementById("modal-root").innerHTML.length;
-      if(busy) return setTimeout(wait, 1500);
-      setTimeout(function(){ location.reload(); }, 1200);
-    })();
+  function note(text){
+    var t = document.createElement("div");
+    t.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:200;background:#14624F;color:#EAF2EC;" +
+      "padding:11px 15px;border-radius:3px;font:13px/1.4 'IBM Plex Sans',system-ui,sans-serif;" +
+      "box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:320px";
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 3200);
   }
 
   /* дві серверні кнопки в блоці профілю */
@@ -373,8 +382,10 @@ textarea{resize:vertical;min-height:60px}
     add();
   });
 
+  /* Раз на 12 секунд питаємо в сервера лише номер версії — це кілька байтів.
+     Саму базу тягнемо тільки тоді, коли її справді хтось змінив. */
   setInterval(async function(){
-    if(syncing || pending || document.hidden) return;
+    if(syncing || pulling || document.hidden || busy()) return;
     syncing = true;
     try{
       var key = "medcrm:v1";
@@ -382,12 +393,12 @@ textarea{resize:vertical;min-height:60px}
         var r = await fetch("/api/rev/" + encodeURIComponent(key), {credentials:"same-origin"});
         if(r.ok){
           var j = await r.json();
-          if(j.rev > revs[key]) banner("Дані оновив інший користувач. Оновлюю сторінку…");
+          if(j.rev > revs[key]) await pull();
         }
       }
     }catch(e){}
     syncing = false;
-  }, 20000);
+  }, 12000);
 })();
 </script>
 <script>
@@ -446,6 +457,7 @@ async function load(){
   await ensureUsers();
   migrate();
   await loadSess();
+  lastSaved = snapshot();
   save();
 }
 /* приведення раніше збереженої бази до нової моделі */
@@ -466,14 +478,105 @@ function migrate(){
     log("Система", `Заявку ${r.no} скасовано: лікарі тепер користуються рецептами`);
   });
 }
-let saveT=null;
+let saveT = null, lastSaved = null, saving = false;
+
+/* Запис у сховище. Головне правило: якщо стан не змінився — не пишемо нічого.
+   Інакше кожне відкриття вкладки рахувалося б зміною, і всі інші користувачі
+   без потреби перечитували б базу. */
 function save(){
   clearTimeout(saveT);
-  saveT = setTimeout(async ()=>{
-    try{ await window.storage.set(SKEY, JSON.stringify(S)); }
-    catch(e){ console.warn("Не вдалось зберегти:", e); }
-  }, 250);
+  saveT = setTimeout(flush, 400);
 }
+/* Знімок для запису. Поточний підрозділ (S.role) у нього не входить:
+   він у кожного свій, і якби зберігався у спільній базі, кожен користувач
+   переписував би його одразу після іншого — нескінченний обмін записами. */
+function snapshot(){
+  const c = Object.assign({}, S);
+  delete c.role;
+  return JSON.stringify(c);
+}
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","users","log"];
+const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
+
+/* Тристороннє злиття: що було в базі (base), що зробив я (mine),
+   що встиг записати інший підрозділ (theirs). Записи зіставляються за id,
+   тому одночасні дії в різних місцях системи не затирають одна одну. */
+function mergeArr(base, mine, theirs){
+  const B = byId(base), M = byId(mine);
+  const out = new Map((theirs||[]).map(x=>[x.id, x]));
+  M.forEach((rec, id)=>{
+    const b = B.get(id);
+    if(!b){ out.set(id, rec); return; }                                  // я додав
+    if(JSON.stringify(b) !== JSON.stringify(rec)) out.set(id, rec);      // я змінив
+  });
+  B.forEach((rec, id)=>{ if(!M.has(id)) out.delete(id); });              // я вилучив
+  return [...out.values()];
+}
+function merge3(base, mine, theirs){
+  const out = Object.assign({}, theirs);
+  MERGE_ARRAYS.forEach(k => out[k] = mergeArr(base[k], mine[k], theirs[k]));
+  out.log = (out.log||[]).sort((a,b)=>b.ts-a.ts).slice(0,1500);
+  ["inv","req","rxNo"].forEach(k => out[k] = Math.max(Number(mine[k])||0, Number(theirs[k])||0));
+  delete out.role;
+  return out;
+}
+const isConflict = e => String((e && e.message) || e).indexOf("інший користувач") >= 0;
+function reattachMe(){
+  if(!ME) return;
+  const u = (S.users || []).find(x => x.id === ME.id);
+  if(u && u.active){ ME = u; S.role = u.loc; } else { ME = null; }
+}
+
+async function flush(attempt){
+  attempt = attempt || 0;
+  if(saving){ save(); return; }                 // запис уже триває — спробуємо згодом
+  let txt;
+  try{ txt = snapshot(); }catch(e){ return; }
+  if(txt === lastSaved) return;                 // змін немає
+  saving = true;
+  try{
+    await window.storage.set(SKEY, txt);
+    lastSaved = txt;
+  }catch(e){
+    if(isConflict(e) && attempt < 3){
+      try{
+        const r = await window.storage.get(SKEY);
+        const theirs = JSON.parse(r.value);
+        S = merge3(lastSaved ? JSON.parse(lastSaved) : theirs, S, theirs);
+        reattachMe();
+        saving = false;
+        await flush(attempt + 1);               // записуємо вже злите
+        render();
+        return;
+      }catch(err){ console.warn("Не вдалось злити зміни:", err); }
+    }
+    console.warn("Не вдалось зберегти:", e);
+  }
+  saving = false;
+}
+
+/* Перечитування бази, коли її змінив інший підрозділ.
+   Оновлюємо стан на місці, без перезавантаження сторінки. */
+async function syncFromServer(){
+  try{
+    const r = await window.storage.get(SKEY);
+    if(!r || !r.value) return false;
+    const theirs = JSON.parse(r.value);
+    if(!theirs || !Array.isArray(theirs.items) || !Array.isArray(theirs.batches)) return false;
+
+    if(lastSaved && snapshot() !== lastSaved){    // у мене є незбережені зміни — зливаємо
+      S = merge3(JSON.parse(lastSaved), S, theirs);
+      migrate(); reattachMe(); render(); save();
+      return true;
+    }
+    S = theirs;
+    migrate(); reattachMe();
+    lastSaved = snapshot();
+    render();
+    return true;
+  }catch(e){ return false; }
+}
+window.medcrmSync = syncFromServer;
 function log(type, text, extra, as){
   const who = as || (typeof ME!=="undefined" && ME ? {loc:ME.loc, name:ME.name} : {loc:S.role, name:"Система"});
   S.log.unshift({id:uid("l"), ts:Date.now(), actor:who.loc, user:who.name, type, text, extra:extra||null});
