@@ -1289,17 +1289,17 @@ function usersModal(){
 /* ======================= РЕНДЕР ======================= */
 const $ = s => document.querySelector(s);
 const TABS = [
-  {id:"dash",   n:"Оглядня"},
+  {id:"dash",   n:"Оперативний огляд"},
   {id:"apteka", n:"Аптека"},
   {id:"units",  n:"Філії"},
-  {id:"req",    n:"Жадання"},
+  {id:"req",    n:"Запити"},
   {id:"hist",   n:"Історія"}
 ];
 const TITLES = {
-  dash:["Оглядня","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
+  dash:["Оперативний огляд","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
   apteka:["Аптека","Основний склад: партії на залишках і каталог препаратів"],
   units:["Філії","Медикаменти на руках у підрозділів: кількість, партії та терміни придатності"],
-  req:["Жадання","Заявки та рецепти підрозділів, історія їх виконання"],
+  req:["Запити","Заявки та рецепти підрозділів, історія їх виконання"],
   hist:["Історія","Повний журнал маніпуляцій у системі"]
 };
 
@@ -1420,7 +1420,7 @@ function viewDash(){
     ${LOCS[S.role].kind==="unit" ? `<div class="card" style="margin-bottom:14px"><header><h3>Мої залишки — ${LOCS[S.role].name}</h3></header>
       ${mine.length?`<div class="tw" style="max-height:220px"><table><thead><tr><th>Препарат</th><th class="num">К-сть</th></tr></thead><tbody>
         ${mine.map(r=>`<tr><td>${esc(r.item.name)}</td><td class="num">${qty(r.qty)} ${esc(r.item.unit)}</td></tr>`).join("")}
-      </tbody></table></div>`:`<div class="empty"><strong>Залишків немає</strong>Створіть заявку у вкладці «Жадання».</div>`}
+      </tbody></table></div>`:`<div class="empty"><strong>Залишків немає</strong>Створіть заявку у вкладці «Запити».</div>`}
     </div>`:""}
     <div class="card" style="margin-bottom:14px"><header><h3>Рецепти в очікуванні</h3></header>
       ${rx.length ? rx.map(r=>`<div style="padding:12px 16px;border-bottom:1px solid var(--line)">
@@ -1828,7 +1828,7 @@ function viewUnits(){
   if(!vis.length){
     $("#view").innerHTML = `<div class="card"><div class="empty">
       <strong>Лікарі не зберігають медикаменти на залишках</strong>
-      Препарати видає аптека за рецептом і одразу списує з обліку. Виписати рецепт — у вкладці «Жадання».</div></div>`;
+      Препарати видає аптека за рецептом і одразу списує з обліку. Виписати рецепт — у вкладці «Запити».</div></div>`;
     return;
   }
   if(!vis.includes(sub.units)) sub.units = vis[0];
