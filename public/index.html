@@ -767,7 +767,7 @@ const SKEY = "medcrm:v1";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
-let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds"};
+let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine"};
 let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all"};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
@@ -792,7 +792,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], users:[], role:"apteka", inv:0, req:0, rxNo:0};
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], users:[], role:"apteka", inv:0, req:0, rxNo:0};
 }
 async function load(){
   try{
@@ -810,7 +810,7 @@ async function load(){
 }
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
-  ["items","batches","requests","log","rx","assets","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","tasks","taskLog","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
   if(!S.rx) S.rx = [];
@@ -843,7 +843,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -1044,6 +1044,21 @@ function seed(){
     comment:"Курс 5 діб",
     status:"pending", created:Date.now()-3600e3*2,
     lines:[{itemId:it3.id, want:5, got:0},{itemId:it4.id, want:1, got:0}]});
+  S.tasks = [
+    {id:uid("t"), title:"Інформація про військовослужбовців, які перебувають на лікуванні в закладах МОЗ",
+     loc:"apteka", period:"weekly", day:2, doc:"Розпорядження від 02.06.2025 № 27/11/5-12511", note:"", active:true},
+    {id:uid("t"), title:"Списки лікарів та середнього медичного персоналу визначених спеціальностей",
+     loc:"apteka", period:"monthly", day:5, doc:"Розпорядження від 22.07.2024 № 27/14-17134", note:"", active:true},
+    {id:uid("t"), title:"Про дислокацію та завантаження медичних підрозділів",
+     loc:"apteka", period:"quarterly", day:5, qm:0, doc:"Розпорядження від 08.01.2025 № 33",
+     note:"Уточнити число подання", active:true},
+    {id:uid("t"), title:"Про укомплектованість технікою",
+     loc:"apteka", period:"daily", doc:"Розпорядження від 08.01.2025 № 33", note:"", active:true},
+    {id:uid("t"), title:"Про укомплектованість медичним персоналом",
+     loc:"apteka", period:"daily", doc:"Розпорядження від 08.01.2025 № 33", note:"", active:true},
+    {id:uid("t"), title:"Про залучення медичних працівників до виконання бойових завдань",
+     loc:"apteka", period:"daily", doc:"Розпорядження від 08.01.2025 № 33", note:"", active:true}
+  ];
   S.inv = 1;
   log("Рецепт", `Виписано рецепт ${S.rx[0].no}, пацієнт ${S.rx[0].patient}: ${S.rx[0].lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`,
       null, {loc:"doctors", name:"Черговий лікар"});
@@ -1293,12 +1308,14 @@ const TABS = [
   {id:"apteka", n:"Аптека"},
   {id:"units",  n:"Філії"},
   {id:"req",    n:"Запити"},
+  {id:"terms",  n:"Терміни виконання"},
   {id:"hist",   n:"Історія"}
 ];
 const TITLES = {
   dash:["Оперативний огляд","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
   apteka:["Аптека","Основний склад: партії на залишках і каталог препаратів"],
   units:["Філії","Медикаменти на руках у підрозділів: кількість, партії та терміни придатності"],
+  terms:["Терміни виконання","Періодичні донесення та звіти: періодичність, підстава, стан виконання"],
   req:["Запити","Заявки та рецепти підрозділів, історія їх виконання"],
   hist:["Історія","Повний журнал маніпуляцій у системі"]
 };
@@ -1353,7 +1370,7 @@ function render(){
   $("#actions").innerHTML = "";
   $("#view").innerHTML = "";
 
-  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, hist:viewHist})[tab]();
+  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, terms:viewTerms, hist:viewHist})[tab]();
   save();
 }
 
@@ -1422,6 +1439,23 @@ function viewDash(){
         ${mine.map(r=>`<tr><td>${esc(r.item.name)}</td><td class="num">${qty(r.qty)} ${esc(r.item.unit)}</td></tr>`).join("")}
       </tbody></table></div>`:`<div class="empty"><strong>Залишків немає</strong>Створіть заявку у вкладці «Запити».</div>`}
     </div>`:""}
+    ${(function(){
+      const due = (S.tasks||[]).filter(t=>t.active!==false)
+        .filter(t=> ME.admin || t.loc===ME.loc)
+        .map(t=>({t, st:taskState(t)}))
+        .filter(x=>["overdue","today","soon"].includes(x.st.k))
+        .sort((a,b)=>RANK[a.st.k]-RANK[b.st.k] || a.st.due-b.st.due);
+      if(!due.length) return "";
+      return `<div class="card" style="margin-bottom:14px"><header><h3>Терміни донесень</h3>
+          <span class="spacer"></span><span class="eyebrow">${due.length}</span></header>
+        ${due.map(({t,st})=>`<div style="padding:11px 16px;border-bottom:1px solid var(--line)">
+          <div class="row" style="justify-content:space-between;align-items:center;gap:10px">
+            <div style="min-width:0"><div class="name">${esc(t.title)}</div>
+              <div class="sub2">${esc(taskWhen(t))} · ${LOCS[t.loc].name}</div></div>
+            <span class="tag ${st.cls}"><span class="dot"></span>${esc(st.label)}</span>
+          </div></div>`).join("")}
+      </div>`;
+    })()}
     <div class="card" style="margin-bottom:14px"><header><h3>Рецепти в очікуванні</h3></header>
       ${rx.length ? rx.map(r=>`<div style="padding:12px 16px;border-bottom:1px solid var(--line)">
           <div class="row" style="justify-content:space-between;align-items:center">
@@ -2702,6 +2736,222 @@ function reqDetails(id){
     </tbody></table>`, [{t:"Закрити", f:close}]);
 }
 
+/* =========== ВКЛАДКА: ТЕРМІНИ ВИКОНАННЯ =========== */
+const WD = ["Понеділок","Вівторок","Середа","Четвер","П'ятниця","Субота","Неділя"];
+const MON = ["січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"];
+const PERIOD = {
+  daily:     "Щоденно",
+  weekly:    "Щотижня",
+  monthly:   "Щомісяця",
+  quarterly: "Щоквартально",
+  yearly:    "Щороку"
+};
+const pad2 = n => String(n).padStart(2,"0");
+const ymd  = d => d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate());
+
+/* ключ поточного періоду — за ним видно, чи вже здано цього разу */
+function periodKey(t, d){
+  const y = d.getFullYear();
+  switch(t.period){
+    case "daily":     return ymd(d);
+    case "weekly":    { const m = mondayOf(d); return "W" + ymd(m); }
+    case "monthly":   return y + "-" + pad2(d.getMonth()+1);
+    case "quarterly": return y + "-Q" + (Math.floor(d.getMonth()/3)+1);
+    default:          return String(y);
+  }
+}
+function mondayOf(d){
+  const m = new Date(d); const wd = (m.getDay() + 6) % 7;   // 0 = понеділок
+  m.setDate(m.getDate() - wd); m.setHours(0,0,0,0); return m;
+}
+const lastDay = (y, m) => new Date(y, m+1, 0).getDate();
+
+/* кінцевий строк у поточному періоді */
+function dueDate(t, from){
+  const d = from || today(), y = d.getFullYear(), m = d.getMonth();
+  switch(t.period){
+    case "daily":  return new Date(y, m, d.getDate());
+    case "weekly": { const mo = mondayOf(d); mo.setDate(mo.getDate() + (t.day || 0)); return mo; }
+    case "monthly":return new Date(y, m, Math.min(t.day || 1, lastDay(y, m)));
+    case "quarterly": { const qm = Math.floor(m/3)*3 + (t.qm || 0); return new Date(y, qm, Math.min(t.day || 1, lastDay(y, qm))); }
+    default: { const mm = (t.month || 1) - 1; return new Date(y, mm, Math.min(t.day || 1, lastDay(y, mm))); }
+  }
+}
+const taskDone = (t, d) => (S.taskLog||[]).find(x => x.taskId === t.id && x.key === periodKey(t, d || today()));
+
+function taskState(t){
+  const now = today(), due = dueDate(t, now), done = taskDone(t, now);
+  const days = Math.round((due - now) / 86400000);
+  if(done) return {k:"done", label:"Здано " + dtstr(done.at), cls:"ok", due, days, done};
+  if(days < 0)  return {k:"overdue", label:"Прострочено на " + Math.abs(days) + " дн.", cls:"crit", due, days};
+  if(days === 0) return {k:"today", label:"Строк сьогодні", cls:"warn", due, days};
+  if(days <= 2)  return {k:"soon", label:"Залишилось " + days + " дн.", cls:"warn", due, days};
+  return {k:"ok", label:"Залишилось " + days + " дн.", cls:"", due, days};
+}
+function taskWhen(t){
+  switch(t.period){
+    case "daily":     return "щоденно";
+    case "weekly":    return "щотижня, " + (WD[t.day||0]||"").toLowerCase();
+    case "monthly":   return "щомісяця, до " + (t.day||1) + " числа";
+    case "quarterly": return "щоквартально, до " + (t.day||1) + " числа " +
+                        (t.qm ? (t.qm === 1 ? "другого" : "третього") + " місяця кварталу" : "першого місяця кварталу");
+    default:          return "щороку, до " + (t.day||1) + " " + (MON[(t.month||1)-1] || "");
+  }
+}
+const RANK = {overdue:0, today:1, soon:2, ok:3, done:4};
+
+function viewTerms(){
+  const canEdit = ME.admin;
+  const all = (S.tasks||[]).filter(t => t.active !== false);
+  const mine = all.filter(t => t.loc === ME.loc);
+  const list = (sub.terms === "all" || !mine.length ? all : mine)
+    .map(t => ({t, st: taskState(t)}))
+    .sort((a,b) => RANK[a.st.k] - RANK[b.st.k] || a.st.due - b.st.due);
+
+  if(canEdit) act("Додати донесення", ()=>taskModal(null)).classList.add("primary");
+
+  const cnt = k => all.filter(t => taskState(t).k === k).length;
+  const v = $("#view");
+  v.insertAdjacentHTML("beforeend", `
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="stat ${cnt("overdue")?"crit":"ok"}"><div class="eyebrow">Прострочено</div>
+        <div class="v">${cnt("overdue")}</div><div class="n">строк уже минув</div></div>
+      <div class="stat ${cnt("today")?"warn":""}"><div class="eyebrow">Сьогодні</div>
+        <div class="v">${cnt("today")}</div><div class="n">подати до кінця дня</div></div>
+      <div class="stat"><div class="eyebrow">Найближчі дні</div>
+        <div class="v">${cnt("soon")}</div><div class="n">строк за 1–2 дні</div></div>
+      <div class="stat ok"><div class="eyebrow">Здано в цьому періоді</div>
+        <div class="v">${cnt("done")}</div><div class="n">із ${all.length} донесень</div></div>
+    </div>
+    <div class="row" style="margin-bottom:14px"><div class="seg">
+      <button data-ts="mine" class="${sub.terms==="mine"?"on":""}">Мого підрозділу (${mine.length})</button>
+      <button data-ts="all" class="${sub.terms==="all"?"on":""}">Усі підрозділи (${all.length})</button>
+    </div></div>
+    <div id="tbody"></div>`);
+  v.querySelectorAll("[data-ts]").forEach(b=>b.onclick=()=>{sub.terms=b.dataset.ts; render();});
+
+  $("#tbody").innerHTML = list.length ? `<div class="card">
+      <header><h3>Періодичні донесення</h3><span class="spacer"></span>
+        <span class="eyebrow">${list.length} позицій</span></header>
+      <div class="tw" style="max-height:none"><table><thead><tr>
+        <th>Донесення</th><th>Періодичність</th><th>Строк</th><th>Відповідальний</th><th>Стан</th><th></th></tr></thead><tbody>
+      ${list.map(({t, st})=>`<tr>
+        <td class="name">${esc(t.title)}
+          ${t.doc? `<div class="sub2">${esc(t.doc)}</div>`:""}
+          ${t.note? `<div class="sub2" style="color:var(--warn)">${esc(t.note)}</div>`:""}</td>
+        <td class="sub2">${esc(taskWhen(t))}</td>
+        <td class="mono">${dstr(st.due)}</td>
+        <td><span class="tag">${LOCS[t.loc]?LOCS[t.loc].short:"—"}</span> <span class="sub2">${LOCS[t.loc]?LOCS[t.loc].name:""}</span></td>
+        <td><span class="tag ${st.cls}"><span class="dot"></span>${esc(st.label)}</span>
+          ${st.done? `<div class="sub2">${esc(st.done.user||"")}</div>`:""}</td>
+        <td style="white-space:nowrap;text-align:right">
+          ${(t.loc===ME.loc || canEdit)
+            ? (st.done? `<button class="btn sm" data-undo="${t.id}">Скасувати</button>`
+                      : `<button class="btn sm primary" data-done="${t.id}">Виконано</button>`) : ""}
+          ${canEdit? `<button class="btn sm" data-tedit="${t.id}">Змінити</button>
+                      <button class="btn sm danger" data-tdel="${t.id}">Вилучити</button>`:""}
+        </td></tr>`).join("")}
+    </tbody></table></div></div>`
+    : `<div class="card"><div class="empty"><strong>Донесень не внесено</strong>${
+        canEdit? "Натисніть «Додати донесення», щоб внести перелік із розпоряджень." : "Перелік веде завідувач аптеки."}</div></div>`;
+
+  $("#tbody").querySelectorAll("[data-done]").forEach(b=>b.onclick=()=>{
+    const t = S.tasks.find(x=>x.id===b.dataset.done);
+    (S.taskLog = S.taskLog||[]).push({id:uid("td"), taskId:t.id, key:periodKey(t, today()),
+      at:Date.now(), user:ME.name, loc:ME.loc});
+    log("Строки", `Подано донесення «${t.title}» (${taskWhen(t)}) — ${LOCS[t.loc].name}`);
+    toast("Позначено як виконане"); render();
+  });
+  $("#tbody").querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>{
+    const t = S.tasks.find(x=>x.id===b.dataset.undo), d = taskDone(t);
+    if(!d) return;
+    S.taskLog = S.taskLog.filter(x=>x.id!==d.id);
+    log("Строки", `Скасовано відмітку про подання «${t.title}»`);
+    toast("Відмітку знято"); render();
+  });
+  $("#tbody").querySelectorAll("[data-tedit]").forEach(b=>b.onclick=()=>taskModal(b.dataset.tedit));
+  $("#tbody").querySelectorAll("[data-tdel]").forEach(b=>b.onclick=()=>{
+    const t = S.tasks.find(x=>x.id===b.dataset.tdel);
+    modal("Вилучення донесення", `<p style="margin:0">Вилучити «${esc(t.title)}» з переліку? Відмітки про попередні подання залишаться в журналі.</p>`,
+      [{t:"Скасувати", f:close},{t:"Вилучити", cls:"danger", f:()=>{
+        S.tasks = S.tasks.filter(x=>x.id!==t.id);
+        log("Строки", `Вилучено донесення «${t.title}»`);
+        close(); toast("Вилучено"); render();
+      }}]);
+  });
+}
+
+function taskModal(id){
+  if(!ME.admin) return;
+  const t = id ? S.tasks.find(x=>x.id===id) : null;
+  const p = t ? t.period : "monthly";
+  modal(t ? "Зміна донесення" : "Нове періодичне донесення", `
+    <div class="field" style="margin-bottom:12px"><label>Що подається</label>
+      <input type="text" id="t-title" value="${t?esc(t.title):""}" placeholder="Інформація про військовослужбовців, які перебувають на лікуванні"></div>
+    <div class="grid g2">
+      <div class="field"><label>Відповідальний підрозділ</label>
+        <select id="t-loc">${ORDER.map(l=>`<option value="${l}" ${t&&t.loc===l?"selected":""}>${LOCS[l].name}</option>`).join("")}</select></div>
+      <div class="field"><label>Періодичність</label>
+        <select id="t-period">${Object.entries(PERIOD).map(([k,n])=>`<option value="${k}" ${p===k?"selected":""}>${n}</option>`).join("")}</select></div>
+    </div>
+    <div id="t-when" style="margin-top:10px"></div>
+    <div class="field" style="margin-top:12px"><label>Підстава</label>
+      <input type="text" id="t-doc" value="${t?esc(t.doc||""):""}" placeholder="Розпорядження від 08.01.2025 № 33"></div>
+    <div class="field" style="margin-top:12px"><label>Примітка</label>
+      <input type="text" id="t-note" value="${t?esc(t.note||""):""}" placeholder="Кому подається, у якій формі, що уточнити"></div>`,
+    [{t:"Скасувати", f:close},{t:t?"Зберегти":"Додати", cls:"primary", f:save2}]);
+
+  const per = document.getElementById("t-period");
+  const drawWhen = ()=>{
+    const w = document.getElementById("t-when"), k = per.value;
+    if(k === "daily"){ w.innerHTML = `<p class="sub2" style="margin:0">Строк — кінець кожного дня.</p>`; return; }
+    if(k === "weekly"){
+      w.innerHTML = `<div class="field"><label>День тижня</label><select id="t-day">${
+        WD.map((n,i)=>`<option value="${i}" ${t&&t.period==="weekly"&&t.day===i?"selected":""}>${n}</option>`).join("")}</select></div>`;
+      return;
+    }
+    if(k === "yearly"){
+      w.innerHTML = `<div class="grid g2">
+        <div class="field"><label>Місяць</label><select id="t-month">${
+          MON.map((n,i)=>`<option value="${i+1}" ${t&&t.month===i+1?"selected":""}>${n[0].toUpperCase()+n.slice(1)}</option>`).join("")}</select></div>
+        <div class="field"><label>Число</label><input type="number" id="t-day" min="1" max="31" value="${t&&t.day?t.day:1}"></div></div>`;
+      return;
+    }
+    w.innerHTML = `<div class="grid g2">
+      <div class="field"><label>До якого числа</label><input type="number" id="t-day" min="1" max="31" value="${t&&t.day?t.day:5}"></div>
+      ${k==="quarterly"? `<div class="field"><label>Місяць кварталу</label><select id="t-qm">
+          <option value="0" ${t&&!t.qm?"selected":""}>перший</option>
+          <option value="1" ${t&&t.qm===1?"selected":""}>другий</option>
+          <option value="2" ${t&&t.qm===2?"selected":""}>третій</option></select></div>`:""}
+    </div>`;
+  };
+  drawWhen();
+  per.onchange = drawWhen;
+
+  function save2(){
+    const title = document.getElementById("t-title").value.trim();
+    if(!title) return toast("Вкажіть, що саме подається", true);
+    const k = per.value;
+    const el = id2 => document.getElementById(id2);
+    const data = {
+      title, loc: document.getElementById("t-loc").value, period: k,
+      day:   el("t-day")   ? Math.max(1, Math.min(31, parseInt(el("t-day").value,10) || 1)) : null,
+      qm:    el("t-qm")    ? parseInt(el("t-qm").value,10) : 0,
+      month: el("t-month") ? parseInt(el("t-month").value,10) : null,
+      doc:   document.getElementById("t-doc").value.trim(),
+      note:  document.getElementById("t-note").value.trim(),
+      active: true
+    };
+    if(t){ Object.assign(t, data); log("Строки", `Змінено донесення «${title}» — ${taskWhen(t)}, ${LOCS[t.loc].name}`); }
+    else {
+      const nt = Object.assign({id:uid("t")}, data);
+      (S.tasks = S.tasks||[]).push(nt);
+      log("Строки", `Додано донесення «${title}» — ${taskWhen(nt)}, ${LOCS[nt.loc].name}`);
+    }
+    close(); toast(t?"Зміни збережено":"Донесення додано"); render();
+  }
+}
+
 /* =========== ВКЛАДКА 5: ІСТОРІЯ =========== */
 function viewHist(){
   if(!ME.admin){
@@ -2727,7 +2977,7 @@ function viewHist(){
   });
 
   const types = ["all", ...new Set(S.log.map(l=>l.type))];
-  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Майно":"acc","Доступ":"","Система":""};
+  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Майно":"acc","Строки":"ok","Доступ":"","Система":""};
 
   $("#view").innerHTML = `<div class="row" style="margin-bottom:14px">
       <div class="field" style="width:220px"><label>Тип операції</label>
