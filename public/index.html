@@ -2000,6 +2000,30 @@ function statusTag(r){
   return `<span class="tag ${t[0]}"><span class="dot"></span>${t[1]}</span>`;
 }
 
+/* ---------- швидкий пошук у переліку препаратів ---------- */
+function attachPicker(findId, selId, rows){
+  const inp = document.getElementById(findId), sel = document.getElementById(selId);
+  const opts = rows.map(r => ({
+    v: r.itemId,
+    t: r.item.name + " — " + qty(r.qty) + " " + r.item.unit,
+    s: (r.item.name + " " + (r.item.nomen || "")).toLowerCase()
+  }));
+  const draw = ()=>{
+    const q = inp.value.trim().toLowerCase();
+    const list = q ? opts.filter(o => o.s.indexOf(q) >= 0) : opts;
+    const keep = sel.value;
+    sel.innerHTML = list.length
+      ? list.map(o => `<option value="${o.v}">${esc(o.t)}</option>`).join("")
+      : `<option value="">за запитом нічого не знайдено</option>`;
+    if(list.some(o => o.v === keep)) sel.value = keep;
+    const c = document.getElementById(findId + "-cnt");
+    if(c) c.textContent = q ? (list.length ? "знайдено: " + list.length : "нічого не знайдено")
+                            : "усього позицій: " + opts.length;
+  };
+  inp.oninput = draw;
+  draw();
+}
+
 /* ---------- виписування рецепта ---------- */
 function newRxModal(){
   const rows = stockRows("apteka");
@@ -2024,9 +2048,12 @@ function newRxModal(){
           <input type="text" id="rx-dxnote" placeholder="Наприклад: негоспітальна пневмонія нижньої частки справа"></div>
       </div>
     </div>
+    <div class="field" style="margin-bottom:8px">
+      <label>Пошук препарату <span class="eyebrow" id="rx-find-cnt" style="margin-left:6px"></span></label>
+      <input type="text" id="rx-find" placeholder="назва або номенклатурний номер"></div>
     <div class="row" style="margin-bottom:12px">
       <div class="field" style="flex:1;min-width:250px"><label>Препарат (є в аптеці)</label>
-        <select id="rx-pick">${rows.map(r=>`<option value="${r.itemId}">${esc(r.item.name)} — ${qty(r.qty)} ${esc(r.item.unit)}</option>`).join("")}</select></div>
+        <select id="rx-pick"></select></div>
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
       <button class="btn" id="rx-add">Додати до рецепта</button>
     </div>
@@ -2035,6 +2062,8 @@ function newRxModal(){
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
     <p class="sub2" style="margin:10px 0 0">Після видачі препарат списується з обліку одразу — на лікарів залишок не переноситься.</p>`,
     [{t:"Скасувати", f:close},{t:"Виписати рецепт", cls:"primary", f:submit}]);
+
+  attachPicker("rx-find", "rx-pick", rows);
 
   /* --- вибір діагнозу --- */
   const clsSel = document.getElementById("rx-cls"), blkSel = document.getElementById("rx-blk");
@@ -2084,6 +2113,7 @@ function newRxModal(){
   draw();
   $("#rx-add").onclick = ()=>{
     const id = $("#rx-pick").value, q = parseFloat($("#rx-q").value)||0;
+    if(!id) return toast("Оберіть препарат зі списку", true);
     if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===id);
     if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
@@ -2165,15 +2195,20 @@ function newReqModal(){
   if(!rows.length){ return modal("Створення заявки", `<div class="empty"><strong>У ${LOCS[src].name} немає залишків</strong>Замовляти поки нічого.</div>`, [{t:"Закрити", f:close}]); }
   let lines = [];
   modal(`Заявка до: ${LOCS[src].name}`, `
+    <div class="field" style="margin-bottom:8px">
+      <label>Пошук препарату <span class="eyebrow" id="req-find-cnt" style="margin-left:6px"></span></label>
+      <input type="text" id="req-find" placeholder="назва або номенклатурний номер"></div>
     <div class="row" style="margin-bottom:12px">
       <div class="field" style="flex:1;min-width:260px"><label>Препарат (доступно в ${LOCS[src].name})</label>
-        <select id="pick">${rows.map(r=>`<option value="${r.itemId}">${esc(r.item.name)} — ${qty(r.qty)} ${esc(r.item.unit)}</option>`).join("")}</select></div>
+        <select id="pick"></select></div>
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="pq" step="any" min="0" value="1"></div>
       <button class="btn" id="add">Додати в заявку</button>
     </div>
     <div id="lines"></div>
     <div class="field" style="margin-top:12px"><label>Примітка</label><input type="text" id="note" placeholder="Наприклад: поповнення укладки на добове чергування"></div>`,
     [{t:"Скасувати", f:close},{t:"Подати заявку", cls:"primary", f:submit}]);
+
+  attachPicker("req-find", "pick", rows);
 
   const draw = ()=>{
     $("#lines").innerHTML = lines.length ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Доступно</th><th></th></tr></thead><tbody>
@@ -2187,6 +2222,7 @@ function newReqModal(){
   draw();
   $("#add").onclick = ()=>{
     const id = $("#pick").value, q = parseFloat($("#pq").value)||0;
+    if(!id) return toast("Оберіть препарат зі списку", true);
     if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===id);
     if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
