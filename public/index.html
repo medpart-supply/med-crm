@@ -59,15 +59,15 @@ h1,h2,h3,h4{margin:0;font-weight:600}
 
 .nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;flex:1}
 .nav button{
-  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  display:flex;align-items:flex-start;gap:10px;line-height:1.35;width:100%;text-align:left;
   background:none;border:0;color:#B8C7BE;padding:10px 11px;border-radius:var(--radius);cursor:pointer;
   font-size:13.5px;letter-spacing:.01em;
 }
 .nav button:hover{background:var(--rail-2);color:#EAF2EC}
 .nav button.on{background:var(--rail-3);color:#fff;font-weight:500}
-.nav button .idx{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#6E8578;width:14px}
+.nav button .idx{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#6E8578;width:14px;flex:0 0 14px;padding-top:3px}
 .nav button.on .idx{color:#8FD3B4}
-.nav button .badge{margin-left:auto;background:#B4442F;color:#fff;font-size:10.5px;font-family:"IBM Plex Mono",monospace;padding:1px 6px;border-radius:20px}
+.nav button .badge{margin-left:auto;align-self:center;background:#B4442F;color:#fff;font-size:10.5px;font-family:"IBM Plex Mono",monospace;padding:1px 6px;border-radius:20px}
 
 .role-box{padding:14px 16px 18px;border-top:1px solid rgba(255,255,255,.09);background:rgba(0,0,0,.14)}
 .role-box .eyebrow{color:#6E8578;margin-bottom:7px}
@@ -1321,7 +1321,7 @@ function usersModal(){
 /* ======================= РЕНДЕР ======================= */
 const $ = s => document.querySelector(s);
 const TABS = [
-  {id:"dash",   n:"Оперативний огляд"},
+  {id:"dash",   n:"Основний командний пункт"},
   {id:"apteka", n:"Аптека"},
   {id:"units",  n:"Філії"},
   {id:"req",    n:"Запити"},
@@ -1329,7 +1329,7 @@ const TABS = [
   {id:"hist",   n:"Історія"}
 ];
 const TITLES = {
-  dash:["Оперативний огляд","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
+  dash:["Основний командний пункт (ОКП)","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
   apteka:["Аптека","Основний склад: партії на залишках і каталог препаратів"],
   units:["Філії","Медикаменти на руках у підрозділів: кількість, партії та терміни придатності"],
   terms:["Терміни виконання","Періодичні донесення та звіти: періодичність, підстава, стан виконання"],
