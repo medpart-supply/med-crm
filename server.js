@@ -251,6 +251,18 @@ app.post("/api/restore", gate, async (req, res) => {
   res.json({ restored: n });
 });
 
+// довідник деталізації МКХ-10: великий сталий файл, віддаємо стисненим і надовго кешуємо
+app.get("/mkh4.json", gate, (req, res) => {
+  const gz = path.join(__dirname, "public", "mkh4.json.gz");
+  res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+  if (fs.existsSync(gz)) {
+    res.setHeader("Content-Encoding", "gzip");
+    res.type("application/json");
+    return res.sendFile(gz);
+  }
+  res.sendFile(path.join(__dirname, "public", "mkh4.json"));
+});
+
 app.get("/healthz", (req, res) => res.type("text").send("ok"));
 
 // сторінки
@@ -259,7 +271,7 @@ app.get("/", (req, res) => {
   if (!authed(req)) return res.redirect("/login");
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
-app.use(express.static(path.join(__dirname, "public"), { index: false }));
+app.use(gate, express.static(path.join(__dirname, "public"), { index: false }));
 
 store.init()
   .then(() => app.listen(PORT, () => console.log(`CRM медичної частини слухає порт ${PORT}; сховище: ${store.kind}`)))
