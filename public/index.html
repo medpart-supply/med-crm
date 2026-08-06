@@ -828,6 +828,7 @@ async function load(){
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
   ["items","batches","requests","log","rx","assets","tasks","taskLog","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
   if(!S.rx) S.rx = [];
@@ -949,6 +950,41 @@ function log(type, text, extra, as){
 }
 
 /* ---------- позиції та партії ---------- */
+/* ---------- діюча речовина та аналоги ----------
+   Речовина визначається з назви: беремо слова до першої дози або коми.
+   «Парацетамол 500 мг, табл.» → парацетамол. Поле редаговане. */
+const normINN = v => String(v||"").toLowerCase().replace(/[\u2019\u02BC]/g,"'").replace(/\s+/g," ").trim();
+function guessINN(name){
+  const first = String(name||"").split(",")[0].trim();
+  const out = [];
+  for(const w of first.split(/\s+/)){
+    if(/^[\d(]/.test(w) || /%/.test(w)) break;
+    if(out.length && /^(мг|г|мл|мкг|од|мо|табл|капс|амп|фл|шт|№)/i.test(w)) break;
+    out.push(w);
+    if(out.length >= 3) break;
+  }
+  // «Парацетамол-Дарниця» → «Парацетамол»: відсікаємо назву виробника після дефіса
+  return out.join(" ").replace(/-[А-ЯІЇЄҐA-Z][\wА-Яа-яІіЇїЄєҐґ'\u2019]{2,}$/u, "");
+}
+function analogs(itemId){
+  const it = item(itemId), k = normINN(it.inn);
+  if(!k) return [];
+  return S.items.filter(x => x.id !== itemId && normINN(x.inn) === k)
+    .sort((a,b)=>a.name.localeCompare(b.name,"uk"));
+}
+const stockOf = id => STOCK.reduce((s2,l)=>s2+avail(l,id), 0);
+function analogHTML(itemId, chainOnly){
+  const list = analogs(itemId);
+  if(!list.length) return "";
+  const part = x => {
+    const locs = (chainOnly ? RX_CHAIN : STOCK).filter(l => avail(l, x.id) > 0.0001)
+      .map(l => LOCS[l].short + " " + qty(avail(l, x.id))).join(" · ");
+    return `<span class="tag ${locs?"acc":""}" style="margin:2px 4px 0 0">${esc(x.name)}${locs?" — "+locs:" — немає"}</span>`;
+  };
+  return `<div style="margin-top:6px"><span class="eyebrow">Аналоги за діючою речовиною «${esc(item(itemId).inn)}»</span>
+    <div style="display:flex;flex-wrap:wrap;margin-top:4px">${list.map(part).join("")}</div></div>`;
+}
+
 function findItem(name, nomen, unit){
   const key = (nomen||"").trim().toLowerCase();
   let it = key ? S.items.find(i => (i.nomen||"").toLowerCase() === key) : null;
@@ -959,6 +995,7 @@ function findItem(name, nomen, unit){
     return it;
   }
   it = {id:uid("i"), name:String(name).trim(), nomen:(nomen||"").trim(), unit:(unit||"шт").trim()};
+  it.inn = guessINN(it.name);
   S.items.push(it);
   return it;
 }
@@ -1652,22 +1689,45 @@ function viewApteka(){
       .sort((a,b)=>a.name.localeCompare(b.name,"uk"));
     $("#body").innerHTML = `<div class="card"><header><h3>Каталог препаратів</h3><span class="spacer"></span>
       <span class="eyebrow">${list.length} найменувань</span></header>
-      ${list.length? `<div class="tw"><table><thead><tr><th>Найменування</th><th>Ном. номер</th><th>Од.</th>
+      ${list.length? `<div class="tw"><table><thead><tr><th>Найменування</th><th>Ном. номер</th><th>Діюча речовина</th><th>Од.</th>
         ${STOCK.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}<th class="num">Разом</th>
         <th>Найближчий термін</th>${canEditExp?"<th></th>":""}</tr></thead><tbody>
         ${list.map(i=>{const per=STOCK.map(l=>avail(l,i.id)); const tot=per.reduce((a,b)=>a+b,0);
           const bs=itemBatches(i.id); const near=bs[0]?bs[0].expiry:null; const sh=shelf(near); return `<tr>
-          <td class="name">${esc(i.name)}</td><td class="mono sub2">${esc(i.nomen||"—")}</td><td>${esc(i.unit)}</td>
+          <td class="name">${esc(i.name)}</td><td class="mono sub2">${esc(i.nomen||"—")}</td>
+          <td>${i.inn? esc(i.inn) : `<span class="sub2">не вказано</span>`}
+            ${analogs(i.id).length? `<div class="sub2">аналогів: ${analogs(i.id).length}</div>`:""}</td>
+          <td>${esc(i.unit)}</td>
           ${per.map(x=>`<td class="num" style="${x?"":"color:var(--faint)"}">${x?qty(x):"—"}</td>`).join("")}
           <td class="num" style="font-weight:600">${qty(tot)}</td>
           <td>${bs.length? `<span class="tag ${sh.cls}"><span class="dot"></span>${dstr(near)}${bs.length>1?" +"+(bs.length-1):""}</span>`
                 : `<span class="sub2">немає партій</span>`}</td>
-          ${canEditExp? `<td style="text-align:right">${bs.length? `<button class="btn sm" data-exp="${i.id}">Термін</button>`:""}</td>`:""}
+          ${canEditExp? `<td style="white-space:nowrap;text-align:right">
+            <button class="btn sm" data-inn="${i.id}">Речовина</button>
+            ${bs.length? `<button class="btn sm" data-exp="${i.id}">Термін</button>`:""}</td>`:""}
           </tr>`}).join("")}
       </tbody></table></div>` : `<div class="empty"><strong>Каталог порожній</strong>Найменування додаються автоматично під час оприбуткування.</div>`}
     </div>`;
     $("#body").querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>expiryModal(b.dataset.exp));
+    $("#body").querySelectorAll("[data-inn]").forEach(b=>b.onclick=()=>innModal(b.dataset.inn));
   }
+}
+
+/* ---------- діюча речовина позиції каталогу ---------- */
+function innModal(itemId){
+  if(!(ME.loc === "apteka" && ME.admin)) return toast("Каталог веде завідувач аптеки", true);
+  const it = item(itemId);
+  modal(`Діюча речовина — ${esc(it.name)}`, `
+    <div class="field"><label>Діюча речовина</label>
+      <input type="text" id="i-inn" value="${esc(it.inn||"")}" placeholder="${esc(guessINN(it.name))}"></div>
+    <p class="sub2" style="margin-top:10px">За цим полем система показує аналоги в каталозі. Позиції з однаковою речовиною вважаються аналогами; дозування та форму випуску воно не враховує.</p>
+    <div id="i-alt" style="margin-top:10px">${analogHTML(itemId, false)}</div>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      const v = document.getElementById("i-inn").value.trim();
+      if((it.inn||"") === v){ close(); return; }
+      log("Виправлення", `Діюча речовина «${it.name}»: «${it.inn||"не вказано"}» → «${v||"не вказано"}»`);
+      it.inn = v; close(); toast("Збережено"); render();
+    }}]);
 }
 
 /* ---------- виправлення термінів придатності (лише завідувач аптеки) ---------- */
@@ -1884,10 +1944,12 @@ function manualModal(){
       <label>Препарат <span class="eyebrow" id="m-cnt" style="margin-left:6px"></span></label>
       <input type="text" id="m-find" placeholder="пошук за назвою або номенклатурним номером" style="margin-bottom:6px">
       <select id="m-pick"></select>
-      <div class="sub2" id="m-hint" style="margin-top:6px"></div></div>` : ""}
+      <div class="sub2" id="m-hint" style="margin-top:6px"></div>
+      <div id="m-alt"></div></div>` : ""}
     <div class="grid g2">
       <div class="field" style="grid-column:1/-1"><label>Назва препарату</label><input type="text" id="m-name"></div>
       <div class="field"><label>Номенклатурний номер</label><input type="text" id="m-nom"></div>
+      <div class="field"><label>Діюча речовина</label><input type="text" id="m-inn" placeholder="визначається з назви"></div>
       <div class="field"><label>Одиниця виміру</label><input type="text" id="m-unit" value="шт"></div>
       <div class="field"><label>Кількість</label><input type="number" id="m-qty" step="any" min="0"></div>
       <div class="field"><label>Ціна за одиницю, грн</label><input type="number" id="m-price" step="any" min="0"></div>
@@ -1910,7 +1972,9 @@ function manualModal(){
     };
     const fill = ()=>{
       const it = S.items.find(x => x.id === el("m-pick").value);
+      el("m-alt").innerHTML = it ? analogHTML(it.id, false) : "";
       if(!it){ el("m-hint").textContent = "Заповніть поля вручну — позицію буде додано до каталогу."; return; }
+      el("m-inn").value = it.inn || guessINN(it.name);
       el("m-name").value = it.name;
       el("m-nom").value  = it.nomen || "";
       el("m-unit").value = it.unit;
@@ -1922,6 +1986,7 @@ function manualModal(){
           + (bs.length > 4 ? " та інші" : "") + ". Термін і ціну нової партії вкажіть окремо."
         : "Позиція є в каталозі, але залишків немає.";
     };
+    el("m-name").oninput = ()=>{ if(!el("m-pick").value) el("m-inn").value = guessINN(el("m-name").value); };
     el("m-find").oninput = drawPick;
     el("m-pick").onchange = fill;
     drawPick();
@@ -1940,9 +2005,13 @@ function manualModal(){
       const nom = el("m-nom").value.trim(), un = el("m-unit").value.trim() || "шт";
       if((picked.nomen||"") !== nom){ changes.push(`ном. номер: «${picked.nomen||"—"}» → «${nom||"—"}»`); picked.nomen = nom; }
       if(picked.unit !== un){ changes.push(`одиниця: «${picked.unit}» → «${un}»`); picked.unit = un; }
+      const inn = el("m-inn").value.trim();
+      if((picked.inn||"") !== inn){ changes.push(`діюча речовина: «${picked.inn||"—"}» → «${inn||"—"}»`); picked.inn = inn; }
       if(changes.length) log("Виправлення", `Змінено дані препарату в каталозі — ${changes.join("; ")}`);
     }else{
       it = findItem(name, el("m-nom").value, el("m-unit").value);
+      const inn = el("m-inn").value.trim();
+      if(inn) it.inn = inn;
     }
     addBatch("apteka", it.id, q, parseFloat(el("m-price").value) || 0, el("m-exp").value, el("m-src").value.trim());
     log("Надходження", `Оприбутковано ${qty(q)} ${it.unit} «${it.name}»${picked ? " (позиція вже була в каталозі)" : " (нова позиція)"}`);
@@ -2488,7 +2557,7 @@ function statusTag(r){
 }
 
 /* ---------- швидкий пошук у переліку препаратів ---------- */
-function attachPicker(findId, selId, rows){
+function attachPicker(findId, selId, rows, onPick){
   const inp = document.getElementById(findId), sel = document.getElementById(selId);
   const opts = rows.map(r => ({
     v: r.itemId,
@@ -2506,8 +2575,10 @@ function attachPicker(findId, selId, rows){
     const c = document.getElementById(findId + "-cnt");
     if(c) c.textContent = q ? (list.length ? "знайдено: " + list.length : "нічого не знайдено")
                             : "усього позицій: " + opts.length;
+    if(onPick) onPick(sel.value);
   };
   inp.oninput = draw;
+  if(onPick) sel.addEventListener("change", ()=>onPick(sel.value));
   draw();
 }
 
@@ -2548,13 +2619,17 @@ function newRxModal(){
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
       <button class="btn" id="rx-add">Додати до рецепта</button>
     </div>
+    <div id="rx-alt" style="margin:-6px 0 12px"></div>
     <div id="rx-lines"></div>
     <div class="field" style="margin-top:12px"><label>Коментар</label>
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
     <p class="sub2" style="margin:10px 0 0">Списання йде за ланцюгом: спершу пост медсестри, далі старша медсестра, і лише потім склад аптеки. На лікарів залишок не переноситься.</p>`,
     [{t:"Скасувати", f:close},{t:"Виписати рецепт", cls:"primary", f:submit}]);
 
-  attachPicker("rx-find", "rx-pick", rows);
+  attachPicker("rx-find", "rx-pick", rows, id => {
+    const w = document.getElementById("rx-alt");
+    if(w) w.innerHTML = id ? analogHTML(id, true) : "";
+  });
   loadMkh4().then(()=>{ if(document.getElementById("rx-detwrap")) renderDetail(); });
 
   /* --- вибір діагнозу --- */
