@@ -1016,6 +1016,60 @@ function takeFEFO(loc, itemId, need){
   return {taken, short: Math.round(left*1000)/1000};
 }
 
+/* ---------- ланцюг списання за рецептом ----------
+   Спершу пост медсестри, далі старша медсестра, і лише потім склад аптеки. */
+const RX_CHAIN = ["post","senior","apteka"];
+const rxAvail = itemId => RX_CHAIN.reduce((s,l)=>s+avail(l,itemId), 0);
+function rxStockRows(){
+  const m = new Map();
+  RX_CHAIN.forEach(loc => stockRows(loc).forEach(r => {
+    const cur = m.get(r.itemId);
+    if(cur){ cur.qty += r.qty; cur.sum += r.sum; cur.per[loc] = r.qty; }
+    else m.set(r.itemId, {itemId:r.itemId, item:r.item, qty:r.qty, sum:r.sum, per:{[loc]:r.qty}});
+  }));
+  return [...m.values()].sort((a,b)=>a.item.name.localeCompare(b.item.name,"uk"));
+}
+/* скільки і звідки візьмемо, не змінюючи залишків */
+function planTake(itemId, need){
+  const plan = []; let left = need;
+  for(const loc of RX_CHAIN){
+    if(left <= 0.0001) break;
+    const has = avail(loc, itemId);
+    if(has <= 0.0001) continue;
+    const q = Math.min(has, left);
+    plan.push({loc, qty:q}); left -= q;
+  }
+  return plan;
+}
+/* що ще треба видати за рецептом */
+function rxRemaining(r){
+  return r.lines.map((l, i) => ({i, l, need: Math.round((l.want - (l.got||0))*1000)/1000}))
+    .filter(x => x.need > 0.0001);
+}
+/* розкладка залишку по підрозділах у порядку ланцюга */
+function rxPlanAll(r){
+  const byLoc = new Map();
+  rxRemaining(r).forEach(({i, l, need}) => {
+    planTake(l.itemId, need).forEach(pt => {
+      if(!byLoc.has(pt.loc)) byLoc.set(pt.loc, []);
+      byLoc.get(pt.loc).push({i, itemId:l.itemId, qty:pt.qty});
+    });
+  });
+  return RX_CHAIN.filter(l => byLoc.has(l)).map(l => ({loc:l, items:byLoc.get(l)}));
+}
+/* чия черга видавати: підрозділ, з якого списується першим */
+const rxExecutor = r => { const p = rxPlanAll(r); return p.length ? p[0].loc : null; };
+/* закриваємо рецепт, коли віддавати більше нічого або нема звідки */
+function rxSettle(r){
+  const rem = rxRemaining(r);
+  if(!rem.length){ r.status = "issued"; r.closed = Date.now(); return "issued"; }
+  if(!rem.some(x => rxAvail(x.l.itemId) > 0.0001)){ r.status = "partial"; r.closed = Date.now(); return "partial"; }
+  return "pending";
+}
+const planLabel = p => p.length ? p.map(x => LOCS[x.loc].short + " " + qty(x.qty)).join(" · ") : "—";
+const haveLabel = itemId => RX_CHAIN.filter(l => avail(l, itemId) > 0.0001)
+  .map(l => LOCS[l].short + " " + qty(avail(l, itemId))).join(" · ") || "немає";
+
 /* ---------- заявки ---------- */
 const pending = () => S.requests.filter(r=>r.status==="pending");
 const pendingFor = loc => pending().filter(r=>r.to===loc);
@@ -2291,16 +2345,21 @@ function viewReq(){
 
   /* --- рецепти в очікуванні --- */
   function drawRx(){
-    const mine = pRx.filter(r=>r.docLoc===S.role);
-    const list = isPharm || ME.admin ? pRx : mine;
+    const list = pRx.filter(r => ME.admin || rxExecutor(r) === S.role || r.docLoc === S.role);
     $("#rbody").innerHTML = list.length ? `<div class="card"><header>
-        <h3>${isPharm||ME.admin ? "Рецепти на видачу" : "Мої рецепти в очікуванні"}</h3>
+        <h3>${ME.admin ? "Рецепти на видачу" : "Рецепти, що стосуються вас"}</h3>
         <span class="spacer"></span><span class="eyebrow">${list.length}</span></header>
-      ${list.map(r=>`<div style="padding:15px 16px;border-bottom:1px solid var(--line)">
+      ${list.map(r => {
+        const exec = rxExecutor(r);
+        const mine = exec === S.role;
+        const part = (rxPlanAll(r)[0] || {items:[]}).items;
+        return `<div style="padding:15px 16px;border-bottom:1px solid var(--line)">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
             <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
-              <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}</span></div>
+              <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}</span>
+              ${exec ? `<span class="tag ${mine?"warn":""}" style="margin-left:6px">видає: ${LOCS[exec].short}</span>`
+                     : `<span class="tag crit" style="margin-left:6px">немає залишків</span>`}</div>
             <div class="sub2" style="margin-top:4px">Виписав: ${esc(r.doctor)} · ${dtstr(r.created)}</div>
             <div style="margin-top:5px"><span class="tag acc"><span class="mono">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span></span>
               <span class="sub2"> ${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||"уточнений код"):r.dx.name)):"діагноз не вказано"}${
@@ -2308,20 +2367,26 @@ function viewReq(){
             ${r.comment? `<div class="sub2" style="margin-top:4px">Коментар: ${esc(r.comment)}</div>`:""}
           </div>
           <div class="row">
-            ${isPharm? `<button class="btn primary sm" data-rxi="${r.id}">Видати за рецептом</button>
-                        <button class="btn danger sm" data-rxr="${r.id}">Відхилити</button>`:""}
+            ${(mine || (ME.admin && exec)) ? `<button class="btn primary sm" data-rxi="${r.id}">Видати ${mine?"свою частину":"за "+LOCS[exec].short}</button>`:""}
+            ${(S.role==="apteka" || ME.admin) ? `<button class="btn danger sm" data-rxr="${r.id}">Відхилити</button>`:""}
             ${r.docLoc===S.role? `<button class="btn sm" data-rxc="${r.id}">Скасувати</button>`:""}
           </div>
         </div>
-        <table style="margin-top:10px"><thead><tr><th>Препарат</th><th class="num">Призначено</th><th class="num">Є в аптеці</th><th></th></tr></thead><tbody>
-          ${r.lines.map(l=>{const it=item(l.itemId); const has=avail("apteka",l.itemId); const ok=has>=l.want;
+        <table style="margin-top:10px"><thead><tr><th>Препарат</th><th class="num">Призначено</th>
+          <th class="num">Вже видано</th><th>Є в наявності</th>
+          <th>${exec?"Частина "+LOCS[exec].short:"Звідки"}</th></tr></thead><tbody>
+          ${r.lines.map((l, i)=>{
+            const it = item(l.itemId), has = rxAvail(l.itemId);
+            const mineQty = part.filter(x => x.i === i).reduce((s2,x)=>s2+x.qty, 0);
             return `<tr><td>${esc(it.name)}<div class="sub2 mono">${esc(it.nomen||"—")}</div></td>
-              <td class="num">${qty(l.want)} ${esc(it.unit)}</td><td class="num">${qty(has)}</td>
-              <td><span class="tag ${ok?"ok":"warn"}"><span class="dot"></span>${ok?"вистачає":"недостатньо"}</span></td></tr>`}).join("")}
-        </tbody></table></div>`).join("")}
+              <td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+              <td class="num" style="color:${(l.got||0)?"var(--ok)":"var(--faint)"}">${l.got?qty(l.got):"—"}</td>
+              <td class="sub2">${esc(haveLabel(l.itemId))}</td>
+              <td class="num mono">${mineQty?qty(mineQty)+" "+esc(it.unit):"—"}</td></tr>`}).join("")}
+        </tbody></table></div>`}).join("")}
       </div>`
-      : `<div class="card"><div class="empty"><strong>Рецептів в очікуванні немає</strong>${
-          isDoc ? "Натисніть «Виписати рецепт», щоб призначити препарат пацієнту." : "Лікарі ще не виписали рецептів."}</div></div>`;
+      : `<div class="card"><div class="empty"><strong>Рецептів, що потребують вашої участі, немає</strong>${
+          isDoc ? "Натисніть «Виписати рецепт», щоб призначити препарат пацієнту." : "Черга порожня."}</div></div>`;
     $("#rbody").querySelectorAll("[data-rxi]").forEach(b=>b.onclick=()=>issueRxModal(b.dataset.rxi));
     $("#rbody").querySelectorAll("[data-rxr]").forEach(b=>b.onclick=()=>rejectRxModal(b.dataset.rxr));
     $("#rbody").querySelectorAll("[data-rxc]").forEach(b=>b.onclick=()=>{
@@ -2343,7 +2408,8 @@ function viewReq(){
             <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
               <div class="sub2">${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||r.dx.name):r.dx.name)):""}</div></td>
             <td class="sub2">${esc(r.doctor)}</td>
-            <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`).join("<br>")}</td>
+            <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`
+                  + (l.from&&l.from.length?` <span class="sub2 mono">(${esc(l.from.map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · "))})</span>`:"")).join("<br>")}</td>
             <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
             <td>${statusTag(r)}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>Виданих рецептів ще немає</strong>Тут з'являться виконані, частково виконані та відхилені рецепти.</div>`}
@@ -2393,8 +2459,8 @@ function attachPicker(findId, selId, rows){
 
 /* ---------- виписування рецепта ---------- */
 function newRxModal(){
-  const rows = stockRows("apteka");
-  if(!rows.length) return modal("Рецепт", `<div class="empty"><strong>На складі аптеки немає залишків</strong>Призначати поки нічого.</div>`, [{t:"Закрити", f:close}]);
+  const rows = rxStockRows();
+  if(!rows.length) return modal("Рецепт", `<div class="empty"><strong>Залишків немає ні на посту, ні у старшої медсестри, ні в аптеці</strong>Призначати поки нічого.</div>`, [{t:"Закрити", f:close}]);
   let lines = [];
   modal("Рецепт на видачу препарату", `
     <div class="grid g2" style="margin-bottom:14px">
@@ -2423,7 +2489,7 @@ function newRxModal(){
       <label>Пошук препарату <span class="eyebrow" id="rx-find-cnt" style="margin-left:6px"></span></label>
       <input type="text" id="rx-find" placeholder="назва або номенклатурний номер"></div>
     <div class="row" style="margin-bottom:12px">
-      <div class="field" style="flex:1;min-width:250px"><label>Препарат (є в аптеці)</label>
+      <div class="field" style="flex:1;min-width:250px"><label>Препарат (наявний у частині)</label>
         <select id="rx-pick"></select></div>
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
       <button class="btn" id="rx-add">Додати до рецепта</button>
@@ -2431,7 +2497,7 @@ function newRxModal(){
     <div id="rx-lines"></div>
     <div class="field" style="margin-top:12px"><label>Коментар</label>
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
-    <p class="sub2" style="margin:10px 0 0">Після видачі препарат списується з обліку одразу — на лікарів залишок не переноситься.</p>`,
+    <p class="sub2" style="margin:10px 0 0">Списання йде за ланцюгом: спершу пост медсестри, далі старша медсестра, і лише потім склад аптеки. На лікарів залишок не переноситься.</p>`,
     [{t:"Скасувати", f:close},{t:"Виписати рецепт", cls:"primary", f:submit}]);
 
   attachPicker("rx-find", "rx-pick", rows);
@@ -2553,9 +2619,10 @@ function newRxModal(){
   };
 
   const draw = ()=>{
-    $("#rx-lines").innerHTML = lines.length ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Є в аптеці</th><th></th></tr></thead><tbody>
-      ${lines.map((l,i)=>{const it=item(l.itemId); const has=avail("apteka",l.itemId); return `<tr>
-        <td>${esc(it.name)}</td><td class="num">${qty(l.want)} ${esc(it.unit)}</td>
+    $("#rx-lines").innerHTML = lines.length ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Є в наявності</th><th></th></tr></thead><tbody>
+      ${lines.map((l,i)=>{const it=item(l.itemId); const has=rxAvail(l.itemId); return `<tr>
+        <td>${esc(it.name)}<div class="sub2">${esc(haveLabel(l.itemId))}</div></td>
+        <td class="num">${qty(l.want)} ${esc(it.unit)}</td>
         <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
         <td style="text-align:right"><button class="btn sm danger" data-del="${i}">Прибрати</button></td></tr>`}).join("")}
       </tbody></table>` : `<div class="empty" style="padding:20px"><strong>Рецепт порожній</strong>Оберіть препарат і додайте його до рецепта.</div>`;
@@ -2590,7 +2657,13 @@ function newRxModal(){
 /* ---------- видача за рецептом зі списанням ---------- */
 function issueRxModal(id){
   const r = S.rx.find(x=>x.id===id);
-  modal(`Видача за рецептом ${r.no}`, `
+  const groups = rxPlanAll(r);
+  if(!groups.length) return toast("Видавати нічого — залишків немає", true);
+  const g = groups[0], loc = g.loc;
+  if(loc !== S.role && !ME.admin) return toast("Зараз видає " + LOCS[loc].name, true);
+
+  const parts = g.items.map(x => ({i:x.i, itemId:x.itemId, qty:x.qty}));
+  modal(`Видача за рецептом ${r.no} — ${LOCS[loc].name}`, `
     <div class="grid g3" style="margin-bottom:14px">
       <div><div class="eyebrow">Пацієнт</div><div class="name">${esc(r.patient)}</div></div>
       <div><div class="eyebrow">Лікар</div><div>${esc(r.doctor)}</div></div>
@@ -2602,34 +2675,48 @@ function issueRxModal(id){
         ${r.dx&&r.dx.sub?`<div class="sub2">${r.dx.det?"рубрика "+esc(r.dx.sub)+" · "+esc(r.dx.subName)+" · ":""}блок ${esc(r.dx.code)} · ${esc(r.dx.name)}</div>`:""}
         ${r.dxNote?`<div class="sub2">${esc(r.dxNote)}</div>`:""}</div></div>
     ${r.comment? `<p class="sub2" style="margin-top:0">Коментар лікаря: ${esc(r.comment)}</p>`:""}
-    <table class="lines"><thead><tr><th>Препарат</th><th class="num">Призначено</th><th class="num">Є</th><th class="num">Видати</th><th>Партії (FEFO)</th></tr></thead><tbody>
-    ${r.lines.map((l,i)=>{const it=item(l.itemId); const has=avail("apteka",l.itemId); const give=Math.min(l.want,has);
-      const bs = atLoc("apteka").filter(b=>b.itemId===l.itemId).sort((a,b)=>(dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15)).slice(0,2);
+    <table class="lines"><thead><tr><th>Препарат</th><th class="num">Потрібно ще</th>
+      <th class="num">Є у вас</th><th class="num">Видати зараз</th><th>Партії (FEFO)</th></tr></thead><tbody>
+    ${parts.map((pt, k)=>{
+      const it = item(pt.itemId), need = r.lines[pt.i].want - (r.lines[pt.i].got||0), has = avail(loc, pt.itemId);
+      const bs = atLoc(loc).filter(b=>b.itemId===pt.itemId)
+        .sort((a2,b2)=>(dparse(a2.expiry)||9e15)-(dparse(b2.expiry)||9e15)).slice(0,2);
       return `<tr><td>${esc(it.name)}<div class="sub2 mono">${esc(it.nomen||"—")}</div></td>
-        <td class="num">${qty(l.want)} ${esc(it.unit)}</td>
-        <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
-        <td class="num"><input type="number" class="mono" data-rxl="${i}" step="any" min="0" max="${has}" value="${give}" style="width:100px;text-align:right"></td>
+        <td class="num">${qty(need)} ${esc(it.unit)}</td>
+        <td class="num" style="color:${has>=need?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
+        <td class="num"><input type="number" class="mono" data-pt="${k}" step="any" min="0" max="${Math.min(has, need)}" value="${pt.qty}" style="width:100px;text-align:right"></td>
         <td class="sub2 mono">${bs.map(b=>dstr(b.expiry)).join(", ")||"—"}</td></tr>`}).join("")}
     </tbody></table>
-    <p class="sub2" style="margin-top:12px">Видані препарати списуються зі складу аптеки за принципом FEFO і на жоден підрозділ не зараховуються.</p>`,
+    <p class="sub2" style="margin-top:12px">Списується лише із залишків підрозділу «${LOCS[loc].name}», за принципом FEFO.
+      ${groups.length>1 ? `Решту видасть ${groups.slice(1).map(x=>LOCS[x.loc].name).join(", ")} — рецепт залишиться в черзі.` : ""}</p>`,
     [{t:"Скасувати", f:close},{t:"Видати та списати", cls:"primary", f:go}]);
 
   function go(){
-    const give = [...document.querySelectorAll("[data-rxl]")].map(i=>parseFloat(i.value)||0);
-    if(give.every(g=>g<=0)) return toast("Вкажіть кількість хоча б для одного препарату", true);
-    let full = true, parts = [];
-    r.lines.forEach((l,i)=>{
-      const want = Math.min(give[i], avail("apteka", l.itemId));
-      if(want > 0){ takeFEFO("apteka", l.itemId, want); l.got = want; }
-      if((l.got||0) + 0.0001 < l.want) full = false;
-      if(l.got>0) parts.push(`${item(l.itemId).name} — ${qty(l.got)} ${item(l.itemId).unit}`);
+    const vals = [...document.querySelectorAll("[data-pt]")].map(i=>parseFloat(i.value)||0);
+    if(vals.every(v=>v<=0)) return toast("Вкажіть кількість хоча б для одного препарату", true);
+    const given = [];
+    parts.forEach((pt, k)=>{
+      const l = r.lines[pt.i];
+      const need = l.want - (l.got||0);
+      const q = Math.min(vals[k], need, avail(loc, pt.itemId));
+      if(q <= 0.0001) return;
+      takeFEFO(loc, pt.itemId, q);
+      l.got = Math.round(((l.got||0) + q)*1000)/1000;
+      (l.from = l.from||[]).push({loc, qty:q});
+      given.push(`${item(pt.itemId).name} — ${qty(q)} ${item(pt.itemId).unit}`);
     });
-    r.status = full ? "issued" : "partial";
-    r.closed = Date.now(); r.by = ME.name;
-    log("Видача", `За рецептом ${r.no} (пацієнт ${r.patient}, лікар ${r.doctor}) видано і списано зі складу: ${parts.join("; ") || "нічого"}`, {rx:r.no});
-    close(); toast(full ? "Видано за рецептом і списано" : "Видано частково і списано"); render();
+    if(!given.length){ close(); return toast("Нічого не видано", true); }
+    const state = rxSettle(r);
+    if(state !== "pending") r.by = ME.name;
+    log("Видача", `За рецептом ${r.no} (пацієнт ${r.patient}, лікар ${r.doctor}) ${LOCS[loc].name} видав і списав: ${given.join("; ")}`
+      + (state === "pending" ? " — рецепт залишається відкритим" : ""), {rx:r.no});
+    close();
+    toast(state === "pending" ? "Видано вашу частину, рецепт передано далі"
+        : state === "issued" ? "Рецепт виконано повністю" : "Рецепт закрито частково");
+    render();
   }
 }
+
 function rejectRxModal(id){
   const r = S.rx.find(x=>x.id===id);
   modal("Відхилення рецепта " + r.no, `<div class="field"><label>Причина відмови</label>
