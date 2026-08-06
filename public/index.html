@@ -1876,24 +1876,78 @@ function importModal(){
 }
 
 function manualModal(){
-  modal("Оприбуткувати вручну", `<div class="grid g2">
-      <div class="field"><label>Назва препарату</label><input type="text" id="m-name"></div>
+  const rows = S.items.map(i => ({i, tot: STOCK.reduce((s2,l)=>s2+avail(l,i.id), 0)}))
+    .sort((a2,b2)=>a2.i.name.localeCompare(b2.i.name,"uk"));
+
+  modal("Оприбуткувати вручну", `
+    ${rows.length ? `<div class="field" style="margin-bottom:14px">
+      <label>Препарат <span class="eyebrow" id="m-cnt" style="margin-left:6px"></span></label>
+      <input type="text" id="m-find" placeholder="пошук за назвою або номенклатурним номером" style="margin-bottom:6px">
+      <select id="m-pick"></select>
+      <div class="sub2" id="m-hint" style="margin-top:6px"></div></div>` : ""}
+    <div class="grid g2">
+      <div class="field" style="grid-column:1/-1"><label>Назва препарату</label><input type="text" id="m-name"></div>
       <div class="field"><label>Номенклатурний номер</label><input type="text" id="m-nom"></div>
       <div class="field"><label>Одиниця виміру</label><input type="text" id="m-unit" value="шт"></div>
       <div class="field"><label>Кількість</label><input type="number" id="m-qty" step="any" min="0"></div>
       <div class="field"><label>Ціна за одиницю, грн</label><input type="number" id="m-price" step="any" min="0"></div>
       <div class="field"><label>Термін придатності</label><input type="date" id="m-exp"></div>
-      <div class="field" style="grid-column:1/-1"><label>Накладна / підстава</label><input type="text" id="m-src" value="Ручне оприбуткування"></div>
+      <div class="field"><label>Накладна / підстава</label><input type="text" id="m-src" value="Ручне оприбуткування"></div>
     </div>`,
-    [{t:"Скасувати", f:close},{t:"Оприбуткувати", cls:"primary", f:()=>{
-      const name = $("#m-name").value.trim(), q = parseFloat($("#m-qty").value)||0;
-      if(!name) return toast("Вкажіть назву препарату", true);
-      if(q<=0) return toast("Кількість має бути більшою за нуль", true);
-      const it = findItem(name, $("#m-nom").value, $("#m-unit").value);
-      addBatch("apteka", it.id, q, parseFloat($("#m-price").value)||0, $("#m-exp").value, $("#m-src").value.trim());
-      log("Надходження", `Оприбутковано ${qty(q)} ${it.unit} «${it.name}»`);
-      close(); toast("Оприбутковано"); render();
-    }}]);
+    [{t:"Скасувати", f:close},{t:"Оприбуткувати", cls:"primary", f:submit}]);
+
+  const el = id => document.getElementById(id);
+  if(rows.length){
+    const drawPick = ()=>{
+      const q = el("m-find").value.trim().toLowerCase();
+      const list = q ? rows.filter(r => (r.i.name + " " + (r.i.nomen||"")).toLowerCase().indexOf(q) >= 0) : rows;
+      const keep = el("m-pick").value;
+      el("m-pick").innerHTML = `<option value="">— нова позиція, якої ще немає в каталозі —</option>` +
+        list.map(r => `<option value="${r.i.id}">${esc(r.i.name)}${r.i.nomen?" · "+esc(r.i.nomen):""} — залишок ${qty(r.tot)} ${esc(r.i.unit)}</option>`).join("");
+      if(list.some(r => r.i.id === keep)) el("m-pick").value = keep;
+      el("m-cnt").textContent = q ? "знайдено: " + list.length : "у каталозі: " + rows.length;
+      fill();
+    };
+    const fill = ()=>{
+      const it = S.items.find(x => x.id === el("m-pick").value);
+      if(!it){ el("m-hint").textContent = "Заповніть поля вручну — позицію буде додано до каталогу."; return; }
+      el("m-name").value = it.name;
+      el("m-nom").value  = it.nomen || "";
+      el("m-unit").value = it.unit;
+      const bs = S.batches.filter(b => b.itemId === it.id && b.qty > 0.0001)
+        .sort((x,y)=>(dparse(x.expiry)||9e15)-(dparse(y.expiry)||9e15));
+      if(bs.length && !el("m-price").value) el("m-price").value = bs[bs.length-1].price || "";
+      el("m-hint").innerHTML = bs.length
+        ? "Наявні партії: " + bs.slice(0,4).map(b => `${LOCS[b.loc].short} ${qty(b.qty)} до ${dstr(b.expiry)} по ${money(b.price)} грн`).join("; ")
+          + (bs.length > 4 ? " та інші" : "") + ". Термін і ціну нової партії вкажіть окремо."
+        : "Позиція є в каталозі, але залишків немає.";
+    };
+    el("m-find").oninput = drawPick;
+    el("m-pick").onchange = fill;
+    drawPick();
+  }
+
+  function submit(){
+    const name = el("m-name").value.trim(), q = parseFloat(el("m-qty").value) || 0;
+    if(!name) return toast("Вкажіть назву препарату", true);
+    if(q <= 0) return toast("Кількість має бути більшою за нуль", true);
+    const picked = rows.length ? S.items.find(x => x.id === el("m-pick").value) : null;
+    let it;
+    if(picked){
+      it = picked;
+      const changes = [];
+      if(picked.name !== name){ changes.push(`назва: «${picked.name}» → «${name}»`); picked.name = name; }
+      const nom = el("m-nom").value.trim(), un = el("m-unit").value.trim() || "шт";
+      if((picked.nomen||"") !== nom){ changes.push(`ном. номер: «${picked.nomen||"—"}» → «${nom||"—"}»`); picked.nomen = nom; }
+      if(picked.unit !== un){ changes.push(`одиниця: «${picked.unit}» → «${un}»`); picked.unit = un; }
+      if(changes.length) log("Виправлення", `Змінено дані препарату в каталозі — ${changes.join("; ")}`);
+    }else{
+      it = findItem(name, el("m-nom").value, el("m-unit").value);
+    }
+    addBatch("apteka", it.id, q, parseFloat(el("m-price").value) || 0, el("m-exp").value, el("m-src").value.trim());
+    log("Надходження", `Оприбутковано ${qty(q)} ${it.unit} «${it.name}»${picked ? " (позиція вже була в каталозі)" : " (нова позиція)"}`);
+    close(); toast("Оприбутковано"); render();
+  }
 }
 
 function exportStock(){
