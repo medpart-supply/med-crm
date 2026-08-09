@@ -2396,13 +2396,17 @@ const rxPending = () => (S.rx||[]).filter(r=>r.status==="pending");
 
 function viewReq(){
   const isDoc = LOCS[S.role].kind==="prescriber";
+  const canRx = isDoc || S.role === "post";          // лікарі та пост медсестри
   const isPharm = S.role==="apteka";
-  if(isDoc){
-    act("Виписати рецепт", ()=>newRxModal(false)).classList.add("primary");
+  if(canRx){
+    act("Створити призначення", ()=>newRxModal(false)).classList.add("primary");
     const cb = act("Рецепт Cito!", ()=>newRxModal(true));
     cb.classList.add("danger"); cb.style.fontWeight = "600";
   }
-  else if(canOrder(S.role)) act("Створити заявку", newReqModal).classList.add("primary");
+  if(canOrder(S.role)){
+    const rb = act("Створити заявку", newReqModal);
+    if(!canRx) rb.classList.add("primary");
+  }
 
   const pReq = pending(), pRx = rxPending();
   const doneReq = S.requests.filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
@@ -2491,7 +2495,7 @@ function viewReq(){
               <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}</span>
               ${exec ? `<span class="tag ${mine?"warn":""}" style="margin-left:6px">видає: ${LOCS[exec].short}</span>`
                      : `<span class="tag crit" style="margin-left:6px">немає залишків</span>`}</div>
-            <div class="sub2" style="margin-top:4px">Виписав: ${esc(r.doctor)} · ${dtstr(r.created)}</div>
+            <div class="sub2" style="margin-top:4px">Призначив: ${esc(r.doctor)}${r.docLoc&&LOCS[r.docLoc]?" · "+LOCS[r.docLoc].name:""} · ${dtstr(r.created)}</div>
             <div style="margin-top:5px"><span class="tag acc"><span class="mono">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span></span>
               <span class="sub2"> ${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||"уточнений код"):r.dx.name)):"діагноз не вказано"}${
                 r.dx&&r.dx.sub?" · блок "+esc(r.dx.code):""}${r.dxNote?" — "+esc(r.dxNote):""}</span></div>
@@ -2517,7 +2521,7 @@ function viewReq(){
         </tbody></table></div>`}).join("")}
       </div>`
       : `<div class="card"><div class="empty"><strong>Рецептів, що потребують вашої участі, немає</strong>${
-          isDoc ? "Натисніть «Виписати рецепт», щоб призначити препарат пацієнту." : "Черга порожня."}</div></div>`;
+          canRx ? "Натисніть «Створити призначення», щоб призначити препарат пацієнту." : "Черга порожня."}</div></div>`;
     $("#rbody").querySelectorAll("[data-rxi]").forEach(b=>b.onclick=()=>issueRxModal(b.dataset.rxi));
     $("#rbody").querySelectorAll("[data-rxr]").forEach(b=>b.onclick=()=>rejectRxModal(b.dataset.rxr));
     $("#rbody").querySelectorAll("[data-rxc]").forEach(b=>b.onclick=()=>{
@@ -2533,7 +2537,7 @@ function viewReq(){
     $("#rbody").innerHTML = `
       <div class="card" style="margin-bottom:14px"><header><h3>Історія рецептів</h3><span class="spacer"></span>
         <span class="eyebrow">${doneRx.length}</span></header>
-        ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Лікар</th><th>Препарати</th>
+        ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Призначив</th><th>Препарати</th>
             <th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
           ${doneRx.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="name">${esc(r.patient)}</td>
@@ -2595,16 +2599,16 @@ function attachPicker(findId, selId, rows, onPick){
 function newRxModal(cito){
   const chain = cito ? CITO_CHAIN : RX_CHAIN;
   const rows = cito ? stockRows("apteka") : rxStockRows();
-  if(!rows.length) return modal(cito ? "Терміновий рецепт" : "Рецепт",
+  if(!rows.length) return modal(cito ? "Терміновий рецепт" : "Призначення",
     `<div class="empty"><strong>${cito ? "На складі аптеки немає залишків" : "Залишків немає ні на посту, ні у старшої медсестри, ні в аптеці"}</strong>Призначати поки нічого.</div>`,
     [{t:"Закрити", f:close}]);
   let lines = [];
-  modal(cito ? "Рецепт Cito! — терміновий" : "Рецепт на видачу препарату", `
+  modal(cito ? "Рецепт Cito! — терміновий" : "Призначення на видачу препарату", `
     ${cito ? `<div class="auth-err" style="background:var(--crit-soft);border-color:#E0B6BA;color:var(--crit);margin-bottom:14px">
       <b>Cito!</b> Препарат видається негайно зі складу аптеки, поза чергою і без обходу постів. Залишки поста та старшої медсестри не зачіпаються.</div>`:""}
     <div class="grid g2" style="margin-bottom:14px">
       <div class="field"><label>ПІБ пацієнта</label><input type="text" id="rx-pat" placeholder="Шевченко І. М."></div>
-      <div class="field"><label>Лікар</label><input type="text" value="${esc(ME.name)}" disabled></div>
+      <div class="field"><label>Призначив</label><input type="text" value="${esc(ME.name)} · ${LOCS[S.role].name}" disabled></div>
     </div>
     <div class="card" style="margin-bottom:14px"><header><h3>Діагноз за МКХ-10</h3>
         <span class="sub2" style="margin-left:8px">НК 025:2021</span>
@@ -2631,16 +2635,16 @@ function newRxModal(cito){
       <div class="field" style="flex:1;min-width:250px"><label>Препарат (${cito ? "є на складі аптеки" : "наявний у частині"})</label>
         <select id="rx-pick"></select></div>
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
-      <button class="btn" id="rx-add">Додати до рецепта</button>
+      <button class="btn" id="rx-add">Додати до призначення</button>
     </div>
     <div id="rx-alt" style="margin:-6px 0 12px"></div>
     <div id="rx-lines"></div>
     <div class="field" style="margin-top:12px"><label>Коментар</label>
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
     <p class="sub2" style="margin:10px 0 0">${cito
-      ? "Списання відбувається одразу зі складу аптеки. На лікарів залишок не переноситься."
-      : "Списання йде за ланцюгом: спершу пост медсестри, далі старша медсестра, і лише потім склад аптеки. На лікарів залишок не переноситься."}</p>`,
-    [{t:"Скасувати", f:close},{t:"Виписати рецепт", cls:"primary", f:submit}]);
+      ? "Списання відбувається одразу зі складу аптеки, поза ланцюгом постів."
+      : "Списання йде за ланцюгом: спершу пост медсестри, далі старша медсестра, і лише потім склад аптеки."}</p>`,
+    [{t:"Скасувати", f:close},{t:cito?"Виписати Cito!":"Створити призначення", cls:"primary", f:submit}]);
 
   attachPicker("rx-find", "rx-pick", rows, id => {
     const w = document.getElementById("rx-alt");
@@ -2794,8 +2798,8 @@ function newRxModal(cito){
       comment:$("#rx-com").value.trim(), status:"pending", created:Date.now(),
       lines:lines.map(l=>({itemId:l.itemId, want:l.want, got:0}))};
     (S.rx = S.rx||[]).push(r);
-    log("Рецепт", `Виписано ${cito ? "ТЕРМІНОВИЙ рецепт (Cito!)" : "рецепт"} ${r.no}, пацієнт ${pat}, діагноз ${dxLabel(dx)}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no, dx:dx.code});
-    close(); toast(cito ? "Cito! Рецепт " + r.no + " передано в аптеку поза чергою" : "Рецепт " + r.no + " передано в аптеку"); render();
+    log("Рецепт", `${cito ? "Виписано ТЕРМІНОВИЙ рецепт (Cito!)" : "Створено призначення"} ${r.no}, пацієнт ${pat}, діагноз ${dxLabel(dx)}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no, dx:dx.code});
+    close(); toast(cito ? "Cito! Рецепт " + r.no + " передано поза чергою" : "Призначення " + r.no + " передано на виконання"); render();
   }
 }
 
@@ -2813,7 +2817,7 @@ function issueRxModal(id){
       <b>Терміновий рецепт.</b> Видається негайно зі складу аптеки.</div>`:""}
     <div class="grid g3" style="margin-bottom:14px">
       <div><div class="eyebrow">Пацієнт</div><div class="name">${esc(r.patient)}</div></div>
-      <div><div class="eyebrow">Лікар</div><div>${esc(r.doctor)}</div></div>
+      <div><div class="eyebrow">Призначив</div><div>${esc(r.doctor)}</div></div>
       <div><div class="eyebrow">Виписано</div><div class="mono">${dtstr(r.created)}</div></div>
     </div>
     <div style="margin:-4px 0 12px"><div class="eyebrow">Діагноз за МКХ-10</div>
