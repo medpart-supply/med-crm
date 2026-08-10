@@ -1055,8 +1055,8 @@ function takeFEFO(loc, itemId, need){
 
 /* ---------- ланцюг списання за рецептом ----------
    Спершу пост медсестри, далі старша медсестра, і лише потім склад аптеки. */
-const RX_CHAIN = ["post","senior","apteka"];
-const CITO_CHAIN = ["apteka"];                       // Cito! — одразу зі складу аптеки
+const RX_CHAIN   = ["post","senior"];                // призначення: пост → старша медсестра
+const CITO_CHAIN = ["apteka"];                       // Cito! — тільки склад аптеки
 const rxChain = r => (r && r.cito) ? CITO_CHAIN : RX_CHAIN;
 const rxAvail = (itemId, chain) => (chain || RX_CHAIN).reduce((s,l)=>s+avail(l,itemId), 0);
 function rxStockRows(){
@@ -2635,7 +2635,8 @@ function newRxModal(cito){
   const chain = cito ? CITO_CHAIN : RX_CHAIN;
   const rows = cito ? stockRows("apteka") : rxStockRows();
   if(!rows.length) return modal(cito ? "Терміновий рецепт" : "Призначення",
-    `<div class="empty"><strong>${cito ? "На складі аптеки немає залишків" : "Залишків немає ні на посту, ні у старшої медсестри, ні в аптеці"}</strong>Призначати поки нічого.</div>`,
+    `<div class="empty"><strong>${cito ? "На складі аптеки немає залишків" : "Залишків немає ні на посту, ні у старшої медсестри"}</strong>${
+      cito ? "Призначати поки нічого." : "Замовте медикаменти заявкою або скористайтесь рецептом Cito!"}</div>`,
     [{t:"Закрити", f:close}]);
   let lines = [];
   modal(cito ? "Рецепт Cito! — терміновий" : "Призначення на видачу препарату", `
@@ -2667,7 +2668,7 @@ function newRxModal(cito){
       <label>Пошук препарату <span class="eyebrow" id="rx-find-cnt" style="margin-left:6px"></span></label>
       <input type="text" id="rx-find" placeholder="назва або номенклатурний номер"></div>
     <div class="row" style="margin-bottom:12px">
-      <div class="field" style="flex:1;min-width:250px"><label>Препарат (${cito ? "є на складі аптеки" : "наявний у частині"})</label>
+      <div class="field" style="flex:1;min-width:250px"><label>Препарат (${cito ? "є на складі аптеки" : "є на посту або у старшої медсестри"})</label>
         <select id="rx-pick"></select></div>
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
       <button class="btn" id="rx-add">Додати до призначення</button>
@@ -2678,7 +2679,7 @@ function newRxModal(cito){
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
     <p class="sub2" style="margin:10px 0 0">${cito
       ? "Терміновий рецепт не потребує погодження: списання відбувається одразу зі складу аптеки, поза ланцюгом постів."
-      : "Призначення спершу перевіряє старша медсестра, після погодження списання йде за ланцюгом: пост медсестри → старша медсестра → склад аптеки."}</p>`,
+      : "Призначення спершу перевіряє старша медсестра, після погодження списання йде за ланцюгом: пост медсестри → старша медсестра. Склад аптеки за призначеннями не списується."}</p>`,
     [{t:"Скасувати", f:close},{t:cito?"Виписати Cito!":"Створити призначення", cls:"primary", f:submit}]);
 
   attachPicker("rx-find", "rx-pick", rows, id => {
