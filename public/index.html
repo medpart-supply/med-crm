@@ -2831,6 +2831,7 @@ function newRxModal(cito){
     if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===id);
     if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
+    $("#rx-q").value = 1;                       // наступна позиція починається з одиниці
     draw();
   };
   function submit(){
@@ -2979,6 +2980,7 @@ function reviewRxModal(id){
     if(q <= 0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===pid);
     if(ex) ex.want += q; else lines.push({itemId:pid, want:q});
+    document.getElementById("rev-q").value = 1;
     draw();
   };
 
@@ -3133,6 +3135,7 @@ function newReqModal(){
     if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===id);
     if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
+    $("#pq").value = 1;
     draw();
   };
   function submit(){
