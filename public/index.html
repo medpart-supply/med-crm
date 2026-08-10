@@ -2496,7 +2496,7 @@ function viewReq(){
             ${r.comment? `<div class="sub2" style="margin-top:4px">Коментар: ${esc(r.comment)}</div>`:""}
           </div>
           <div class="row">
-            ${canReview()? `<button class="btn primary sm" data-rev="${r.id}">Перевірити та погодити</button>
+            ${canReview()? `<button class="btn primary sm" data-rev="${r.id}">Перевірити та видати</button>
                             <button class="btn danger sm" data-rxr="${r.id}">Відхилити</button>`:""}
             ${r.docLoc===S.role? `<button class="btn sm" data-rxc="${r.id}">Скасувати</button>`:""}
           </div>
@@ -2915,7 +2915,7 @@ function reviewRxModal(id){
   let lines = r.lines.map(l => ({itemId:l.itemId, want:l.want}));
   const before = r.lines.map(l => `${item(l.itemId).name} — ${qty(l.want)} ${item(l.itemId).unit}`).join("; ");
 
-  modal(`Контроль призначення ${r.no}`, `
+  modal(`Контроль і видача — призначення ${r.no}`, `
     <div class="grid g3" style="margin-bottom:12px">
       <div><div class="eyebrow">Пацієнт</div><div class="name">${esc(r.patient)}</div></div>
       <div><div class="eyebrow">Призначив</div><div>${esc(r.doctor)}<div class="sub2">${LOCS[r.docLoc]?LOCS[r.docLoc].name:""}</div></div></div>
@@ -2933,20 +2933,28 @@ function reviewRxModal(id){
     </div>
     <div class="field" style="margin-top:12px"><label>Примітка старшої медсестри</label>
       <input type="text" id="rev-note" placeholder="Наприклад: зменшено дозу до наявного фасування"></div>
-    <p class="sub2" style="margin-top:10px">Після погодження призначення піде на видачу: ${chain.map(l=>LOCS[l].short).join(" → ")}. Усі правки буде записано в журнал.</p>`,
-    [{t:"Скасувати", f:close},{t:"Погодити та передати на видачу", cls:"primary", f:approve}]);
+    <p class="sub2" style="margin-top:10px">Після погодження медикаменти списуються одразу за ланцюгом ${chain.map(l=>LOCS[l].short).join(" → ")}, у межах підрозділу — за принципом FEFO. Усі правки буде записано в журнал.</p>`,
+    [{t:"Скасувати", f:close},{t:"Погодити та списати", cls:"primary", f:approve}]);
 
   const draw = ()=>{
     document.getElementById("rev-lines").innerHTML = lines.length
-      ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th>Є в наявності</th><th></th></tr></thead><tbody>
+      ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Є</th><th>Спишеться з</th><th></th></tr></thead><tbody>
         ${lines.map((l,i)=>{const it=item(l.itemId), has=rxAvail(l.itemId, chain); return `<tr>
           <td>${esc(it.name)}<div class="sub2">${esc(haveLabel(l.itemId, chain))}</div></td>
           <td class="num"><input type="number" data-rl="${i}" class="mono" step="any" min="0" value="${l.want}" style="width:90px;text-align:right"> ${esc(it.unit)}</td>
           <td class="num" style="color:${has>=l.want?"var(--ok)":"var(--warn)"}">${qty(has)}</td>
+          <td class="sub2 mono" data-rplan="${i}">${esc(planLabel(planTake(l.itemId, Math.min(l.want, has), chain)))}</td>
           <td style="text-align:right"><button class="btn sm danger" data-rdel="${i}">Прибрати</button></td></tr>`}).join("")}
       </tbody></table>`
       : `<div class="empty" style="padding:18px"><strong>Жодного препарату не залишилось</strong>Додайте препарат або відхиліть призначення.</div>`;
     document.querySelectorAll("[data-rdel]").forEach(b=>b.onclick=()=>{ sync(); lines.splice(+b.dataset.rdel,1); draw(); });
+    document.querySelectorAll("[data-rl]").forEach(i=>i.onchange=()=>{ sync(); draw(); });
+    document.querySelectorAll("[data-rl]").forEach(inp=>inp.oninput = ()=>{
+      const i = +inp.dataset.rl, l = lines[i];
+      const want = Math.min(parseFloat(inp.value)||0, rxAvail(l.itemId, chain));
+      const cell = document.querySelector(`[data-rplan="${i}"]`);
+      if(cell) cell.textContent = planLabel(planTake(l.itemId, want, chain));
+    });
   };
   const sync = ()=>{ document.querySelectorAll("[data-rl]").forEach(i=>{ lines[+i.dataset.rl].want = parseFloat(i.value)||0; }); };
   draw();
@@ -2971,13 +2979,29 @@ function reviewRxModal(id){
       return {itemId:l.itemId, want:l.want, got:(old && old.got) || 0, from:(old && old.from) || undefined};
     });
     const after = r.lines.map(l => `${item(l.itemId).name} — ${qty(l.want)} ${item(l.itemId).unit}`).join("; ");
-    r.status = "pending";
     r.review = {by:ME.name, at:Date.now(), note, changed: before !== after};
-    log("Рецепт", `Старша медсестра погодила призначення ${r.no} (пацієнт ${r.patient})`
+    log("Рецепт", `${LOCS[S.role].name} погодила призначення ${r.no} (пацієнт ${r.patient})`
       + (before !== after ? ` з правками: було ${before}; стало ${after}` : " без змін")
       + (note ? ` — ${note}` : ""), {rx:r.no});
+
+    /* одразу списуємо за ланцюгом */
+    const given = [];
+    r.lines.forEach(l => {
+      const plan = planTake(l.itemId, l.want, chain);
+      plan.forEach(pt => takeFEFO(pt.loc, l.itemId, pt.qty));
+      const got = plan.reduce((s2,pt)=>s2+pt.qty, 0);
+      if(got > 0.0001){
+        l.got = got;
+        l.from = plan.map(pt => ({loc:pt.loc, qty:pt.qty}));
+        given.push(`${item(l.itemId).name} — ${qty(got)} ${item(l.itemId).unit} (${planLabel(plan)})`);
+      }
+    });
+    const state = rxSettle(r);
+    r.by = ME.name;
+    log("Видача", `За призначенням ${r.no} (пацієнт ${r.patient}, призначив ${r.doctor}) списано: ${given.join("; ") || "нічого — залишків немає"}`, {rx:r.no});
     close();
-    toast(before !== after ? "Погоджено з правками" : "Погоджено, передано на видачу");
+    toast(state === "issued" ? (before !== after ? "Погоджено з правками та списано" : "Погоджено та списано")
+        : "Списано частково — залишків не вистачило");
     render();
   }
 }
