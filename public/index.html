@@ -3000,6 +3000,12 @@ function newReqModal(){
   if(!rows.length){ return modal("Створення заявки", `<div class="empty"><strong>У ${LOCS[src].name} немає залишків</strong>Замовляти поки нічого.</div>`, [{t:"Закрити", f:close}]); }
   let lines = [];
   modal(`Заявка до: ${LOCS[src].name}`, `
+    <div class="row" style="margin-bottom:12px;align-items:center">
+      <button class="btn sm" id="req-imp">Завантажити заявку з Excel</button>
+      <button class="btn sm" id="req-tpl">Шаблон</button>
+      <input type="file" id="req-file" accept=".xlsx,.xls,.csv" hidden>
+      <span class="sub2" id="req-info" style="flex:1"></span>
+    </div>
     <div class="field" style="margin-bottom:8px">
       <label>Пошук препарату <span class="eyebrow" id="req-find-cnt" style="margin-left:6px"></span></label>
       <input type="text" id="req-find" placeholder="назва або номенклатурний номер"></div>
@@ -3014,6 +3020,63 @@ function newReqModal(){
     [{t:"Скасувати", f:close},{t:"Подати заявку", cls:"primary", f:submit}]);
 
   attachPicker("req-find", "pick", rows);
+
+  /* --- заявка з файлу --- */
+  const info = document.getElementById("req-info");
+  const byNom = new Map(), byName = new Map();
+  rows.forEach(r => {
+    if(r.item.nomen) byNom.set(String(r.item.nomen).trim().toLowerCase(), r);
+    byName.set(r.item.name.trim().toLowerCase(), r);
+  });
+  document.getElementById("req-imp").onclick = ()=>document.getElementById("req-file").click();
+  document.getElementById("req-tpl").onclick = ()=>{
+    const aoa = [["Назва препарату","Номенклатурний номер","Кількість"],
+      ["Натрію хлорид 0,9% 200 мл","2831.00.1",20],
+      ["Бинт марлевий 7м х 14см","3005.90.4",50]];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Заявка");
+    XLSX.writeFile(wb, "shablon-zayavky.xlsx");
+  };
+  document.getElementById("req-file").onchange = e => {
+    const f = e.target.files[0]; if(!f) return;
+    const fr = new FileReader();
+    fr.onload = ev => {
+      try{
+        const wb = XLSX.read(ev.target.result, {type:"array", cellDates:true});
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, raw:true, defval:""});
+        loadReq(aoa, f.name);
+      }catch(err){ toast("Не вдалося прочитати файл: " + err.message, true); }
+    };
+    fr.readAsArrayBuffer(f);
+  };
+  function loadReq(aoa, fname){
+    let hi = -1, map = null;
+    for(let i=0;i<Math.min(aoa.length,15);i++){
+      const m = mapCols(aoa[i]);
+      if(m.name!=null && m.qty!=null){ hi = i; map = m; break; }
+    }
+    if(hi < 0){ info.innerHTML = `<span style="color:var(--crit)">Не знайдено колонок «Назва» та «Кількість»</span>`; return; }
+    let added = 0, merged = 0;
+    const missing = [], short = [];
+    for(let i=hi+1;i<aoa.length;i++){
+      const r0 = aoa[i]; if(!r0) continue;
+      const nm = String(r0[map.name]||"").trim();
+      if(!nm) continue;
+      const q = num(r0[map.qty]); if(q <= 0) continue;
+      const nom = map.nomen!=null ? String(r0[map.nomen]||"").trim().toLowerCase() : "";
+      const hit = (nom && byNom.get(nom)) || byName.get(nm.toLowerCase());
+      if(!hit){ missing.push(nm); continue; }
+      const ex = lines.find(l => l.itemId === hit.itemId);
+      if(ex){ ex.want += q; merged++; } else { lines.push({itemId:hit.itemId, want:q, got:0}); added++; }
+      const want = lines.find(l => l.itemId === hit.itemId).want;
+      if(want > hit.qty + 0.0001) short.push(`${hit.item.name} (є ${qty(hit.qty)})`);
+    }
+    draw();
+    info.innerHTML = `<b>${esc(fname)}</b>: додано ${added}${merged?", доповнено "+merged:""} позицій`
+      + (short.length ? `<div style="color:var(--warn)">недостатньо в ${LOCS[src].name}: ${esc(short.join("; "))}</div>` : "")
+      + (missing.length ? `<div style="color:var(--crit)">немає в переліку ${LOCS[src].name}: ${esc(missing.join("; "))}</div>` : "");
+    if(!added && !merged) toast("Жодної позиції не розпізнано", true);
+  }
 
   const draw = ()=>{
     $("#lines").innerHTML = lines.length ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Доступно</th><th></th></tr></thead><tbody>
