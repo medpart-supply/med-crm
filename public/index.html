@@ -2125,7 +2125,8 @@ function viewUnits(){
     const u = unitSummary(cur);
     $("#ubody").innerHTML = `<div class="card"><header><h3>${LOCS[cur].name} — медикаменти на залишках</h3>
         <span class="spacer"></span>
-        <span class="eyebrow">${rows.length} позицій · ${qty(u.qty)} од. · ${money(u.sum)} грн</span></header>
+        <span class="eyebrow" style="margin-right:6px">${rows.length} позицій · ${qty(u.qty)} од. · ${money(u.sum)} грн</span>
+        ${canEdit? `<button class="btn sm" id="u-woff">Списати по накладній</button>`:""}</header>
       ${rows.length ? `<div class="tw"><table><thead><tr>
           <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th>
           <th>Партії та терміни придатності</th><th class="num">Сума, грн</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
@@ -2144,6 +2145,7 @@ function viewUnits(){
         LOCS[cur].supplier ? "Медикаменти надходять сюди за заявкою до "+LOCS[LOCS[cur].supplier].name+"." : ""}</div>`}
     </div>`;
     $("#ubody").querySelectorAll("[data-off]").forEach(b=>b.onclick=()=>writeOffModal(cur, b.dataset.off));
+    if(canEdit && document.getElementById("u-woff")) document.getElementById("u-woff").onclick = ()=>writeOffImportModal(cur);
   }
 
   /* ланцюг «старша медсестра → пост» */
@@ -2274,6 +2276,114 @@ function assetDelete(loc, id){
       log("Майно", `${LOCS[loc].name}: вилучено «${a.name}» — ${qty(a.qty)} ${a.unit}`);
       close(); toast("Позицію вилучено"); render();
     }}]);
+}
+
+/* ---------- списання за накладною ---------- */
+function writeOffImportModal(loc){
+  const rows = stockRows(loc);
+  if(!rows.length) return toast("У підрозділі немає залишків", true);
+  const byNom = new Map(), byName = new Map();
+  rows.forEach(r => {
+    if(r.item.nomen) byNom.set(String(r.item.nomen).trim().toLowerCase(), r);
+    byName.set(r.item.name.trim().toLowerCase(), r);
+  });
+
+  modal(`Списання за накладною — ${LOCS[loc].name}`, `
+    <div class="field" style="margin-bottom:12px"><label>Підстава списання</label>
+      <input type="text" id="w-why" placeholder="Наприклад: накладна на видачу № 12 від 05.08.2026"></div>
+    <div class="drop" id="w-drop">
+      <strong>Перетягніть файл Excel або натисніть, щоб вибрати</strong>
+      <span>Колонки: назва препарату, номенклатурний номер, кількість</span>
+      <input type="file" id="w-file" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div style="margin-top:12px"><button class="btn sm" id="w-tpl">Завантажити шаблон</button></div>
+    <div id="w-prev" style="margin-top:14px"></div>`,
+    [{t:"Закрити", f:close}]);
+
+  const drop = document.getElementById("w-drop"), file = document.getElementById("w-file");
+  drop.onclick = ()=>file.click();
+  drop.ondragover = e=>{e.preventDefault(); drop.classList.add("over");};
+  drop.ondragleave = ()=>drop.classList.remove("over");
+  drop.ondrop = e=>{e.preventDefault(); drop.classList.remove("over"); if(e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);};
+  file.onchange = e=>{ if(e.target.files[0]) read(e.target.files[0]); };
+  document.getElementById("w-tpl").onclick = ()=>{
+    const aoa = [["Назва препарату","Номенклатурний номер","Кількість"]]
+      .concat(rows.slice(0,5).map(r=>[r.item.name, r.item.nomen, ""]));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Списання");
+    XLSX.writeFile(wb, "shablon-spysannya.xlsx");
+  };
+
+  function read(f){
+    const fr = new FileReader();
+    fr.onload = ev=>{
+      try{
+        const wb = XLSX.read(ev.target.result, {type:"array", cellDates:true});
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, raw:true, defval:""});
+        parse(aoa, f.name);
+      }catch(err){ toast("Не вдалося прочитати файл: " + err.message, true); }
+    };
+    fr.readAsArrayBuffer(f);
+  }
+  function parse(aoa, fname){
+    let hi = -1, map = null;
+    for(let i=0;i<Math.min(aoa.length,15);i++){
+      const m = mapCols(aoa[i]);
+      if(m.name!=null && m.qty!=null){ hi = i; map = m; break; }
+    }
+    if(hi < 0){
+      document.getElementById("w-prev").innerHTML = `<div class="empty"><strong>Не знайдено заголовки</strong>Потрібні колонки «Назва препарату» та «Кількість».</div>`;
+      return;
+    }
+    const found = [], missing = [];
+    for(let i=hi+1;i<aoa.length;i++){
+      const r0 = aoa[i]; if(!r0) continue;
+      const nm = String(r0[map.name]||"").trim(); if(!nm) continue;
+      const q = num(r0[map.qty]); if(q <= 0) continue;
+      const nom = map.nomen!=null ? String(r0[map.nomen]||"").trim().toLowerCase() : "";
+      const hit = (nom && byNom.get(nom)) || byName.get(nm.toLowerCase());
+      if(!hit){ missing.push(nm); continue; }
+      const ex = found.find(x => x.itemId === hit.itemId);
+      if(ex) ex.want += q; else found.push({itemId:hit.itemId, item:hit.item, have:hit.qty, want:q});
+    }
+    if(!found.length){
+      document.getElementById("w-prev").innerHTML = `<div class="empty"><strong>Жодної позиції не розпізнано</strong>${
+        missing.length ? "Немає на залишках: " + esc(missing.join("; ")) : "Перевірте кількості у файлі."}</div>`;
+      return;
+    }
+    found.forEach(x => x.take = Math.min(x.want, x.have));
+    const short = found.filter(x => x.want > x.have + 0.0001);
+    document.getElementById("w-prev").innerHTML = `<div class="card"><header>
+        <h3>Перевірка: ${found.length} позицій</h3><span class="spacer"></span><span class="eyebrow">${esc(fname)}</span></header>
+      <div class="tw" style="max-height:280px"><table><thead><tr><th>Препарат</th><th class="num">У накладній</th>
+        <th class="num">Є на залишку</th><th class="num">Спишеться</th><th>Стан</th></tr></thead><tbody>
+        ${found.map(x=>`<tr><td>${esc(x.item.name)}<div class="sub2 mono">${esc(x.item.nomen||"—")}</div></td>
+          <td class="num">${qty(x.want)} ${esc(x.item.unit)}</td>
+          <td class="num">${qty(x.have)}</td>
+          <td class="num" style="font-weight:600">${qty(x.take)}</td>
+          <td>${x.want > x.have + 0.0001
+            ? `<span class="tag warn"><span class="dot"></span>не вистачає ${qty(x.want - x.have)}</span>`
+            : `<span class="tag ok"><span class="dot"></span>вистачає</span>`}</td></tr>`).join("")}
+      </tbody></table></div>
+      ${missing.length ? `<div class="pad" style="padding-bottom:0"><span class="sub2" style="color:var(--crit)">Немає на залишках ${LOCS[loc].name}: ${esc(missing.join("; "))}</span></div>` : ""}
+      <div class="pad"><button class="btn danger" id="w-commit">Списати ${found.length} позицій</button></div></div>`;
+
+    document.getElementById("w-commit").onclick = ()=>{
+      const why = document.getElementById("w-why").value.trim() || "за накладною";
+      const done = [];
+      found.forEach(x=>{
+        if(x.take <= 0.0001) return;
+        takeFEFO(loc, x.itemId, x.take);
+        done.push(`${x.item.name} — ${qty(x.take)} ${x.item.unit}`);
+      });
+      if(!done.length){ close(); return toast("Списувати нічого", true); }
+      log("Списання", `${LOCS[loc].name}: за накладною списано ${done.length} позицій — ${done.join("; ")}. Підстава: ${why}`
+        + (short.length ? `. Не вистачило: ${short.map(x=>x.item.name + " (" + qty(x.want - x.have) + ")").join("; ")}` : ""));
+      close();
+      toast(short.length ? "Списано частково — не всього вистачило" : "Списано " + done.length + " позицій");
+      render();
+    };
+  }
 }
 
 /* ---------- завантаження переліку з Excel ---------- */
