@@ -1860,8 +1860,12 @@ const num = v => { if(typeof v==="number") return v; const n = parseFloat(String
 
 function importModal(){
   modal("Завантаження накладної", `
-    <div class="field" style="margin-bottom:14px;max-width:300px"><label>Номер / назва накладної</label>
-      <input type="text" id="invno" value="НК-${String((S.inv||0)+1).padStart(3,"0")} від ${dstr(new Date())}"></div>
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="field"><label>Номер / назва накладної</label>
+        <input type="text" id="invno" value="НК-${String((S.inv||0)+1).padStart(3,"0")} від ${dstr(new Date())}"></div>
+      <div class="field"><label>Куди оприбуткувати</label>
+        <select id="invloc">${STOCK.map(l=>`<option value="${l}" ${l==="apteka"?"selected":""}>${LOCS[l].name}</option>`).join("")}</select></div>
+    </div>
     <div class="drop" id="drop">
       <strong>Перетягніть файл Excel або натисніть, щоб вибрати</strong>
       <span>Підтримується .xlsx, .xls і .csv. Колонки: назва препарату, номенклатурний номер, одиниця виміру, кількість, ціна за одиницю, термін придатності</span>
@@ -1925,9 +1929,10 @@ function importModal(){
       <div class="pad"><button class="btn primary" id="commit">Оприбуткувати ${rows.length} рядків</button></div></div>`;
     $("#commit").onclick = ()=>{
       const inv = $("#invno").value.trim() || "без номера";
-      rows.forEach(r=>{ const it = findItem(r.name, r.nomen, r.unit); addBatch("apteka", it.id, r.qty, r.price, r.exp, inv); });
+      const dest = $("#invloc") ? $("#invloc").value : "apteka";
+      rows.forEach(r=>{ const it = findItem(r.name, r.nomen, r.unit); addBatch(dest, it.id, r.qty, r.price, r.exp, inv); });
       S.inv = (S.inv||0)+1;
-      log("Надходження", `Накладна ${inv}: оприбутковано ${rows.length} позицій на суму ${money(sum)} грн`, {inv, count:rows.length, sum});
+      log("Надходження", `${LOCS[dest].name}: за накладною ${inv} оприбутковано ${rows.length} позицій на суму ${money(sum)} грн`, {inv, count:rows.length, sum, loc:dest});
       close(); toast("Накладну оприбутковано: " + rows.length + " позицій"); render();
     };
   }
@@ -1962,6 +1967,8 @@ function manualModal(){
       <div class="field"><label>Кількість</label><input type="number" id="m-qty" step="any" min="0"></div>
       <div class="field"><label>Ціна за одиницю, грн</label><input type="number" id="m-price" step="any" min="0"></div>
       <div class="field"><label>Термін придатності</label><input type="date" id="m-exp"></div>
+      <div class="field"><label>Куди оприбуткувати</label>
+        <select id="m-loc">${STOCK.map(l=>`<option value="${l}" ${l==="apteka"?"selected":""}>${LOCS[l].name}</option>`).join("")}</select></div>
       <div class="field"><label>Накладна / підстава</label><input type="text" id="m-src" value="Ручне оприбуткування"></div>
     </div>`,
     [{t:"Скасувати", f:close},{t:"Оприбуткувати", cls:"primary", f:submit}]);
@@ -2021,8 +2028,11 @@ function manualModal(){
       const inn = el("m-inn").value.trim();
       if(inn) it.inn = inn;
     }
-    addBatch("apteka", it.id, q, parseFloat(el("m-price").value) || 0, el("m-exp").value, el("m-src").value.trim());
-    log("Надходження", `Оприбутковано ${qty(q)} ${it.unit} «${it.name}»${picked ? " (позиція вже була в каталозі)" : " (нова позиція)"}`);
+    const dest = el("m-loc") ? el("m-loc").value : "apteka";
+    addBatch(dest, it.id, q, parseFloat(el("m-price").value) || 0, el("m-exp").value, el("m-src").value.trim());
+    log("Надходження", `${LOCS[dest].name}: оприбутковано ${qty(q)} ${it.unit} «${it.name}»`
+      + `${picked ? " (позиція вже була в каталозі)" : " (нова позиція)"}`
+      + `${dest !== "apteka" ? " — внесено як залишок підрозділу" : ""}`);
     close(); toast("Оприбутковано"); render();
   }
 }
@@ -3447,11 +3457,35 @@ function viewHist(){
     XLSX.writeFile(wb, "zhurnal-" + new Date().toISOString().slice(0,10) + ".xlsx");
     toast("Журнал вивантажено");
   });
-  if(ME.admin) act("Очистити базу", ()=>{
-    modal("Очищення бази", `<p>Буде видалено всі залишки, заявки, каталог і журнал. Дію не можна скасувати.</p>`,
-      [{t:"Скасувати", f:close},{t:"Видалити все", cls:"danger", f:async ()=>{
-        const keep = S.users; S = blank(); S.users = keep; S.role = ME.loc;
-        log("Система","Базу очищено (облікові записи збережено)"); close(); toast("Базу очищено"); render();
+  if(ME.admin) act("Очищення даних", ()=>{
+    const opts = [
+      ["batches","Залишки медикаментів (усі підрозділи)", true],
+      ["moves","Заявки, призначення та рецепти", true],
+      ["items","Каталог препаратів", false],
+      ["assets","Майно фельдшера", false],
+      ["tasks","Перелік донесень", false],
+      ["log","Журнал операцій", false]
+    ];
+    modal("Очищення даних", `
+      <p class="sub2" style="margin-top:0">Оберіть, що саме прибрати. Облікові записи та паролі не зачіпаються.</p>
+      ${opts.map(([k,n,def])=>`<label style="display:flex;gap:9px;align-items:flex-start;margin-bottom:9px;font-size:13.5px">
+        <input type="checkbox" id="cl-${k}" ${def?"checked":""} style="width:auto;margin-top:3px"> ${n}</label>`).join("")}
+      <p class="sub2" style="margin-top:12px">Дію не можна скасувати. Перед очищенням варто зберегти копію бази.</p>`,
+      [{t:"Скасувати", f:close},{t:"Очистити обране", cls:"danger", f:()=>{
+        const on = k => document.getElementById("cl-" + k).checked;
+        const done = [];
+        if(on("batches")){ done.push("залишки (" + S.batches.length + " партій)"); S.batches = []; }
+        if(on("moves")){
+          done.push("рухи: заявок " + S.requests.length + ", призначень " + (S.rx||[]).length);
+          S.requests = []; S.rx = []; S.req = 0; S.rxNo = 0;
+        }
+        if(on("items")){ done.push("каталог (" + S.items.length + " позицій)"); S.items = []; S.batches = []; }
+        if(on("assets")){ done.push("майно (" + (S.assets||[]).length + " позицій)"); S.assets = []; }
+        if(on("tasks")){ done.push("донесення (" + (S.tasks||[]).length + ")"); S.tasks = []; S.taskLog = []; }
+        if(!done.length){ close(); return toast("Нічого не обрано", true); }
+        if(on("log")){ S.log = []; done.push("журнал"); }
+        log("Система", "Очищено: " + done.join("; "));
+        close(); toast("Очищено"); render();
       }}]);
   });
 
