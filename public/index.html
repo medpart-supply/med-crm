@@ -1,6 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#16211C">
 <title>Медична частина КІ НГУ — облік медикаментів</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -87,6 +89,12 @@ h1,h2,h3,h4{margin:0;font-weight:600}
 .topbar .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
 .topbar .spacer{flex:1}
 .view{padding:22px 26px 60px;max-width:1400px}
+@supports(padding:max(0px)){
+  .rail{padding-left:env(safe-area-inset-left)}
+  .view{padding-left:max(26px, env(safe-area-inset-left));padding-right:max(26px, env(safe-area-inset-right));
+        padding-bottom:max(60px, env(safe-area-inset-bottom))}
+  .modal footer{padding-bottom:max(13px, env(safe-area-inset-bottom))}
+}
 
 /* ---------- primitives ---------- */
 .btn{
@@ -128,7 +136,7 @@ th{
   color:var(--faint);font-weight:500;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--surface-2);
   position:sticky;top:0
 }
-td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle;overflow-wrap:anywhere}
 tbody tr:hover{background:#F5F8F2}
 td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
 .tw{overflow:auto;max-height:560px}
@@ -144,8 +152,8 @@ td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-varian
 
 .field{display:flex;flex-direction:column;gap:5px}
 .field label{font-size:11.5px;color:var(--muted)}
-input[type=text],input[type=number],input[type=date],select,textarea{
-  background:#fff;border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px 9px;width:100%
+input[type=text],input[type=number],input[type=date],input[type=password],select,textarea{
+  max-width:100%;background:#fff;border:1px solid var(--line-strong);border-radius:var(--radius);padding:8px 9px;width:100%
 }
 textarea{resize:vertical;min-height:60px}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
@@ -256,18 +264,117 @@ textarea{resize:vertical;min-height:60px}
 }
 .me-acts button:hover{background:var(--rail-3);color:#fff;border-color:rgba(255,255,255,.25)}
 
-@media (max-width:860px){ .auth{grid-template-columns:1fr} .auth-side{padding:30px 24px} .auth-side h1{font-size:24px;margin-top:16px} .auth-main{padding:26px 24px} }
-@media (max-width:1080px){ .g4{grid-template-columns:repeat(2,1fr)} .split{grid-template-columns:1fr} .g3{grid-template-columns:1fr} .g2{grid-template-columns:1fr} }
-@media (max-width:760px){
-  .app{grid-template-columns:1fr}
-  .rail{position:static;height:auto}
-  .nav{flex-direction:row;overflow:auto;padding:8px}
-  .nav button{width:auto;white-space:nowrap}
-  .role-box{display:flex;gap:10px;align-items:center}
-  .role-box .eyebrow,.role-box .hint{display:none}
-  .view{padding:16px}
-  .topbar{padding:14px 16px}
+/* ============ ПЛАНШЕТ І ТЕЛЕФОН ============ */
+@media (max-width:1080px){
+  .g4{grid-template-columns:repeat(2,1fr)} .split{grid-template-columns:1fr}
+  .g3{grid-template-columns:1fr} .g2{grid-template-columns:1fr}
 }
+@media (max-width:860px){
+  .auth{grid-template-columns:1fr}
+  .auth-side{padding:26px 22px}
+  .auth-side h1{font-size:24px;margin-top:10px}
+  .auth-side .note{display:none}
+  .auth-main{padding:24px 22px}
+  .units{grid-template-columns:1fr 1fr;gap:8px}
+  .unit{padding:11px 12px}
+}
+
+@media (max-width:820px){
+  /* панель згортається у верхній рядок */
+  .app{grid-template-columns:1fr}
+  .rail{position:sticky;top:0;height:auto;z-index:40}
+  .brand{padding:12px 14px 10px;display:flex;align-items:center;gap:10px;border-bottom:0}
+  .brand .org{margin:0 0 0 auto;font-size:9px}
+  .brand h1{font-size:15px}
+  .brand p{display:none}
+  .brand .cross{width:18px;height:18px}
+  .brand .cross:before{left:7px;width:4px;height:18px}
+  .brand .cross:after{top:7px;height:4px;width:18px}
+
+  .nav{flex-direction:row;overflow-x:auto;padding:0 8px 8px;gap:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .nav::-webkit-scrollbar{display:none}
+  .nav button{width:auto;white-space:nowrap;padding:9px 12px;font-size:13px;border-radius:20px;
+    background:var(--rail-2);align-items:center}
+  .nav button .idx{display:none}
+  .nav button .badge{margin-left:6px}
+
+  .role-box{display:flex;align-items:center;gap:10px;padding:9px 14px;flex-wrap:wrap}
+  .role-box .hint{display:none}
+  .me{margin:0;flex:1;min-width:0}
+  .me .av{width:28px;height:28px;font-size:10px}
+  .me-acts{margin-left:auto}
+  .me-acts button{padding:6px 10px}
+
+  .topbar{padding:12px 14px;gap:10px;top:0}
+  .topbar h2{font-size:18px}
+  .topbar .sub{display:none}
+  .topbar .spacer{display:none}
+  #actions{width:100%;gap:8px}
+  #actions .btn{flex:1 1 auto;text-align:center}
+
+  .view{padding:14px}
+  .card > header{padding:11px 13px;flex-wrap:wrap;gap:8px}
+  .pad{padding:13px}
+  .stat{padding:12px 13px}
+  .stat .v{font-size:21px}
+  .seg{width:100%}
+  .seg button{flex:1;padding:9px 8px;font-size:12.5px}
+
+  /* таблиці гортаються вбік, а не ламають сторінку */
+  .tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tw table{min-width:560px}
+  th,td{padding:8px 10px}
+  .lines{min-width:0}
+
+  /* календар донесень */
+  .tstrip{grid-template-columns:repeat(14,120px)}
+  .ribbon .legend{width:100%;margin-left:0;gap:10px;font-size:10.5px}
+
+  /* модальні вікна на весь екран */
+  .scrim{padding:0;align-items:stretch}
+  .modal{max-width:none;min-height:100%;border-radius:0;display:flex;flex-direction:column}
+  .modal header{position:sticky;top:0;background:var(--surface);z-index:2;padding:13px 15px}
+  .modal header h3{font-size:15.5px}
+  .modal .body{padding:15px;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .modal footer{position:sticky;bottom:0;padding:11px 15px;gap:8px}
+  .modal footer .btn{flex:1}
+  .modal .tw{max-height:none}
+  .modal .tw table{min-width:480px}
+
+  #toast{left:12px;right:12px;bottom:12px}
+  .toast{max-width:none}
+  .row{gap:8px}
+  .row > .field{min-width:0}
+}
+
+@media (max-width:520px){
+  .g4{grid-template-columns:1fr 1fr}
+  .units{grid-template-columns:1fr}
+  .view{padding:12px}
+  .topbar{padding:10px 12px}
+  .topbar h2{font-size:16.5px}
+  #actions{flex-direction:column}
+  #actions .btn{width:100%}
+  .stat .v{font-size:19px}
+  .seg{flex-wrap:wrap}
+  .seg button{flex:1 1 45%;border-left:0;border-top:1px solid var(--line)}
+  .tstrip{grid-template-columns:repeat(14,108px)}
+  .tw table{min-width:520px}
+  .card > header h3{font-size:13.5px}
+  .modal .body{padding:13px}
+  .me .who b{max-width:150px}
+}
+
+/* пальцем зручніше по більших полях; iOS не масштабує при 16px */
+@media (hover:none) and (pointer:coarse){
+  input[type=text],input[type=number],input[type=date],input[type=password],select,textarea{
+    font-size:16px;padding:10px}
+  .btn{padding:10px 14px}
+  .btn.sm{padding:7px 11px;font-size:12.5px}
+  .nav button,.me-acts button,.seg button{min-height:38px}
+  tbody tr:hover{background:transparent}
+}
+
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 
