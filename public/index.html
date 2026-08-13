@@ -1059,7 +1059,7 @@ const RANKS = ["курсант","солдат","старший солдат","м
   "головний сержант","штаб-сержант","майстер-сержант","старший майстер-сержант","головний майстер-сержант",
   "молодший лейтенант","лейтенант","старший лейтенант","капітан","майор","підполковник","полковник",
   "працівник ЗСУ / НГУ"];
-const patientLine = r => [r.rank, r.group ? "гр. " + r.group : ""].filter(Boolean).join(" · ");
+const patientLine = r => [r.rank, r.group].filter(Boolean).join(" · ");
 
 const RX_CHAIN   = ["post","senior"];                // призначення: пост → старша медсестра
 const CITO_CHAIN = ["apteka"];                       // Cito! — тільки склад аптеки
@@ -2732,7 +2732,7 @@ function viewReq(){
     const dxTop = [...dx.values()].sort((a,b)=>b.n-a.n);
 
     const grp = new Map();
-    issued.forEach(r => { const k = r.group || "без групи"; grp.set(k, (grp.get(k)||0) + 1); });
+    issued.forEach(r => { const k = r.group || "не вказано"; grp.set(k, (grp.get(k)||0) + 1); });
     const grpTop = [...grp.entries()].sort((a,b)=>b[1]-a[1]);
 
     const months = [];
@@ -2783,8 +2783,8 @@ function viewReq(){
                 <td class="sub2">${esc(x.name)}</td><td class="num">${x.n}</td></tr>`).join("")}
             </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
           </div>
-          <div class="card"><header><h3>За навчальними групами</h3></header>
-            ${grpTop.length? `<div class="tw" style="max-height:220px"><table><thead><tr><th>Група</th>
+          <div class="card"><header><h3>За підрозділами</h3></header>
+            ${grpTop.length? `<div class="tw" style="max-height:220px"><table><thead><tr><th>Підрозділ</th>
               <th class="num">Звернень</th></tr></thead><tbody>
               ${grpTop.map(([g,n])=>`<tr><td>${esc(g)}</td><td class="num">${n}</td></tr>`).join("")}
             </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
@@ -2810,7 +2810,7 @@ function viewReq(){
     document.getElementById("m-kind").onchange = e => { flt.monthKind = e.target.value; render(); };
     document.getElementById("m-exp").onclick = ()=>{
       const wb = XLSX.utils.book_new();
-      const a1 = [["№","Дата","Пацієнт","Звання","Група","Код МКХ","Діагноз","Призначив","Підрозділ","Терміновий","Стан","Препарат","Видано","Одиниця","Звідки"]];
+      const a1 = [["№","Дата","Пацієнт","Звання","Підрозділ пацієнта","Код МКХ","Діагноз","Призначив","Ким призначено (підрозділ)","Терміновий","Стан","Препарат","Видано","Одиниця","Звідки"]];
       all.forEach(r => {
         const base = [r.no, dstr(new Date(r.closed||r.created)), r.patient, r.rank||"", r.group||"",
           r.dx?(r.dx.det||r.dx.sub||r.dx.code):"", r.dx?(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name)):"",
@@ -2825,6 +2825,8 @@ function viewReq(){
           top.map(x=>[x.it.name, x.it.nomen, x.qty, x.it.unit, x.times]))), "Витрата");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
         [["Код МКХ","Діагноз","Звернень"]].concat(dxTop.map(x=>[x.code, x.name, x.n]))), "Діагнози");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+        [["Підрозділ","Звернень"]].concat(grpTop.map(x=>[x[0], x[1]]))), "Підрозділи");
       XLSX.writeFile(wb, "oblik-" + flt.month + "-" + kind + ".xlsx");
       log("Система", `Вивантажено облік ${title} за ${MON[mm-1]} ${yy}: ${all.length} записів`);
       toast("Файл сформовано");
@@ -2912,7 +2914,7 @@ function newRxModal(cito){
       <div class="field"><label>Звання</label>
         <input type="text" id="rx-rank" list="rx-ranks" placeholder="курсант">
         <datalist id="rx-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
-      <div class="field"><label>Навчальна група</label><input type="text" id="rx-group" placeholder="341"></div>
+      <div class="field"><label>Підрозділ</label><input type="text" id="rx-group" placeholder="1 рота, 2 взвод"></div>
       <div class="field" style="grid-column:1/-1"><label>Призначив</label>
         <input type="text" value="${esc(ME.name)} · ${LOCS[S.role].name}" disabled></div>
     </div>
