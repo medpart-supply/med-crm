@@ -785,7 +785,7 @@ const SKEY = "medcrm:v1";
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
 let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine"};
-let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all"};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:""};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
@@ -2540,19 +2540,21 @@ function viewReq(){
   const doneReq = S.requests.filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
   const doneRx  = (S.rx||[]).filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
   if(isDoc && sub.req==="pending") sub.req = "rx";
-  if(!["pending","rx","hist"].includes(sub.req)) sub.req = isDoc ? "rx" : "pending";
+  if(!["pending","rx","hist","month"].includes(sub.req)) sub.req = isDoc ? "rx" : "pending";
 
   const v = $("#view");
   v.insertAdjacentHTML("beforeend", `<div class="row" style="margin-bottom:14px"><div class="seg">
       ${isDoc?"":`<button data-s="pending" class="${sub.req==="pending"?"on":""}">Заявки в очікуванні (${pReq.length})</button>`}
       <button data-s="rx" class="${sub.req==="rx"?"on":""}">Призначення та рецепти (${pRx.length + rRx.length})</button>
       <button data-s="hist" class="${sub.req==="hist"?"on":""}">Історія</button>
+      <button data-s="month" class="${sub.req==="month"?"on":""}">Облік за місяць</button>
     </div></div><div id="rbody"></div>`);
   v.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{sub.req=b.dataset.s;render()});
 
-  if(sub.req==="pending")   drawReq();
-  else if(sub.req==="rx")   drawRx();
-  else                      drawHist();
+  if(sub.req==="pending")     drawReq();
+  else if(sub.req==="rx")     drawRx();
+  else if(sub.req==="month")  drawMonth();
+  else                        drawHist();
 
   /* --- заявки в очікуванні --- */
   function drawReq(){
@@ -2690,6 +2692,143 @@ function viewReq(){
       log("Рецепт", `Рецепт ${r.no} (пацієнт ${r.patient}) скасовано`);
       toast("Рецепт скасовано"); render();
     });
+  }
+
+  /* --- облік за місяць --- */
+  function drawMonth(){
+    if(!flt.monthKind) flt.monthKind = isPharm ? "cito" : "plain";
+    const now = today();
+    if(!flt.month) flt.month = now.getFullYear() + "-" + pad2(now.getMonth()+1);
+    const [yy, mm] = flt.month.split("-").map(Number);
+    const from = new Date(yy, mm-1, 1), to = new Date(yy, mm, 1);
+
+    /* аптека типово рахує рецепти Cito, старша медсестра — звичайні призначення */
+    const kind = flt.monthKind;
+    const all = (S.rx||[]).filter(r => {
+      const d = r.closed || r.created;
+      if(d < +from || d >= +to) return false;
+      return kind === "all" ? true : (kind === "cito" ? !!r.cito : !r.cito);
+    }).sort((a,b)=>(a.closed||a.created)-(b.closed||b.created));
+
+    const issued = all.filter(r => r.status === "issued" || r.status === "partial");
+    const drugs = new Map();
+    let total = 0;
+    issued.forEach(r => r.lines.forEach(l => {
+      const g = l.got || 0; if(g <= 0.0001) return;
+      const it = item(l.itemId);
+      if(!drugs.has(l.itemId)) drugs.set(l.itemId, {it, qty:0, times:0});
+      const d = drugs.get(l.itemId); d.qty += g; d.times++;
+      total += g;
+    }));
+    const top = [...drugs.values()].sort((a,b)=>b.qty-a.qty);
+
+    const dx = new Map();
+    issued.forEach(r => {
+      const k = r.dx ? (r.dx.sub || r.dx.code) : "—";
+      const n = r.dx ? (r.dx.sub ? (r.dx.subName || r.dx.name) : r.dx.name) : "діагноз не вказано";
+      if(!dx.has(k)) dx.set(k, {code:k, name:n, n:0});
+      dx.get(k).n++;
+    });
+    const dxTop = [...dx.values()].sort((a,b)=>b.n-a.n);
+
+    const grp = new Map();
+    issued.forEach(r => { const k = r.group || "без групи"; grp.set(k, (grp.get(k)||0) + 1); });
+    const grpTop = [...grp.entries()].sort((a,b)=>b[1]-a[1]);
+
+    const months = [];
+    for(let i=0;i<12;i++){ const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      months.push([d.getFullYear() + "-" + pad2(d.getMonth()+1), MON[d.getMonth()] + " " + d.getFullYear()]); }
+
+    const title = kind === "cito" ? "рецептів Cito!" : kind === "plain" ? "призначень" : "призначень і рецептів";
+    $("#rbody").innerHTML = `
+      <div class="row" style="margin-bottom:14px">
+        <div class="field" style="width:190px"><label>Місяць</label>
+          <select id="m-sel">${months.map(([v,n])=>`<option value="${v}" ${flt.month===v?"selected":""}>${n}</option>`).join("")}</select></div>
+        <div class="field" style="width:230px"><label>Що обліковуємо</label>
+          <select id="m-kind">
+            <option value="plain" ${kind==="plain"?"selected":""}>Призначення (ПМС → СМС)</option>
+            <option value="cito" ${kind==="cito"?"selected":""}>Рецепти Cito! (склад аптеки)</option>
+            <option value="all" ${kind==="all"?"selected":""}>Усе разом</option>
+          </select></div>
+        <button class="btn" id="m-exp" style="height:37px">Вивантажити в Excel</button>
+      </div>
+
+      <div class="grid g4" style="margin-bottom:14px">
+        <div class="stat acc"><div class="eyebrow">Усього ${esc(title)}</div><div class="v">${all.length}</div>
+          <div class="n">виконано ${issued.length} · відхилено ${all.filter(r=>r.status==="rejected").length}</div></div>
+        <div class="stat"><div class="eyebrow">Пацієнтів</div>
+          <div class="v">${new Set(issued.map(r=>r.patient.trim().toLowerCase())).size}</div>
+          <div class="n">унікальних звернень ${issued.length}</div></div>
+        <div class="stat ok"><div class="eyebrow">Видано одиниць</div><div class="v">${qty(total)}</div>
+          <div class="n">${drugs.size} найменувань</div></div>
+        <div class="stat"><div class="eyebrow">Діагнозів</div><div class="v">${dx.size}</div>
+          <div class="n">${dxTop.length?"найчастіший "+esc(dxTop[0].code):"немає даних"}</div></div>
+      </div>
+
+      <div class="split">
+        <div class="card"><header><h3>Витрата медикаментів</h3><span class="spacer"></span>
+            <span class="eyebrow">${top.length} найменувань</span></header>
+          ${top.length? `<div class="tw"><table><thead><tr><th>Препарат</th><th class="num">Видано</th>
+            <th class="num">Звернень</th></tr></thead><tbody>
+            ${top.map(x=>`<tr><td class="name">${esc(x.it.name)}<div class="sub2 mono">${esc(x.it.nomen||"—")}</div></td>
+              <td class="num" style="font-weight:600">${qty(x.qty)} ${esc(x.it.unit)}</td>
+              <td class="num">${x.times}</td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty"><strong>За цей місяць видач не було</strong>Оберіть інший період.</div>`}
+        </div>
+        <div>
+          <div class="card" style="margin-bottom:14px"><header><h3>За діагнозами</h3></header>
+            ${dxTop.length? `<div class="tw" style="max-height:260px"><table><thead><tr><th>Код</th><th>Діагноз</th>
+              <th class="num">Звернень</th></tr></thead><tbody>
+              ${dxTop.map(x=>`<tr><td class="mono" style="color:var(--accent)">${esc(x.code)}</td>
+                <td class="sub2">${esc(x.name)}</td><td class="num">${x.n}</td></tr>`).join("")}
+            </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
+          </div>
+          <div class="card"><header><h3>За навчальними групами</h3></header>
+            ${grpTop.length? `<div class="tw" style="max-height:220px"><table><thead><tr><th>Група</th>
+              <th class="num">Звернень</th></tr></thead><tbody>
+              ${grpTop.map(([g,n])=>`<tr><td>${esc(g)}</td><td class="num">${n}</td></tr>`).join("")}
+            </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px"><header><h3>Перелік</h3><span class="spacer"></span>
+          <span class="eyebrow">${all.length}</span></header>
+        ${all.length? `<div class="tw"><table><thead><tr><th>№</th><th>Дата</th><th>Пацієнт</th><th>Діагноз</th>
+          <th>Призначив</th><th>Видано</th><th>Стан</th></tr></thead><tbody>
+          ${all.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
+            <td class="mono sub2">${dstr(new Date(r.closed||r.created))}</td>
+            <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
+            <td class="mono sub2">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</td>
+            <td class="sub2">${esc(r.doctor)}</td>
+            <td class="sub2">${r.lines.filter(l=>l.got>0).map(l=>esc(item(l.itemId).name)+" "+qty(l.got)).join("; ")||"—"}</td>
+            <td>${statusTag(r)}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty"><strong>За цей місяць записів немає</strong></div>`}
+      </div>`;
+
+    document.getElementById("m-sel").onchange = e => { flt.month = e.target.value; render(); };
+    document.getElementById("m-kind").onchange = e => { flt.monthKind = e.target.value; render(); };
+    document.getElementById("m-exp").onclick = ()=>{
+      const wb = XLSX.utils.book_new();
+      const a1 = [["№","Дата","Пацієнт","Звання","Група","Код МКХ","Діагноз","Призначив","Підрозділ","Терміновий","Стан","Препарат","Видано","Одиниця","Звідки"]];
+      all.forEach(r => {
+        const base = [r.no, dstr(new Date(r.closed||r.created)), r.patient, r.rank||"", r.group||"",
+          r.dx?(r.dx.det||r.dx.sub||r.dx.code):"", r.dx?(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name)):"",
+          r.doctor, LOCS[r.docLoc]?LOCS[r.docLoc].name:"", r.cito?"Cito!":"", statusTag(r).replace(/<[^>]+>/g,"")];
+        if(!r.lines.length) a1.push(base.concat(["","","",""]));
+        r.lines.forEach(l => a1.push(base.concat([item(l.itemId).name, l.got||0, item(l.itemId).unit,
+          (l.from||[]).map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · ")])));
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a1), "Перелік");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+        [["Препарат","Ном. номер","Видано","Одиниця","Звернень"]].concat(
+          top.map(x=>[x.it.name, x.it.nomen, x.qty, x.it.unit, x.times]))), "Витрата");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+        [["Код МКХ","Діагноз","Звернень"]].concat(dxTop.map(x=>[x.code, x.name, x.n]))), "Діагнози");
+      XLSX.writeFile(wb, "oblik-" + flt.month + "-" + kind + ".xlsx");
+      log("Система", `Вивантажено облік ${title} за ${MON[mm-1]} ${yy}: ${all.length} записів`);
+      toast("Файл сформовано");
+    };
   }
 
   /* --- історія --- */
