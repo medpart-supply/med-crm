@@ -22,6 +22,13 @@
   input{width:100%;background:#22322A;border:1px solid rgba(255,255,255,.14);color:#EAF2EC;
         padding:11px 12px;border-radius:3px;font:inherit}
   input:focus{outline:2px solid #7FBFA4;outline-offset:2px}
+  .pw-wrap{position:relative;display:block}
+  .pw-wrap input{padding-right:44px}
+  .pw-eye{position:absolute;right:1px;top:1px;bottom:1px;width:40px;display:flex;align-items:center;justify-content:center;
+    background:none;border:0;margin:0;cursor:pointer;color:#7C8E84;width:40px}
+  .pw-eye:hover{color:#7FBFA4}
+  .pw-eye.on{color:#7FBFA4}
+  .pw-eye svg{width:20px;height:20px;display:block}
   button{width:100%;margin-top:14px;background:#14624F;border:1px solid #14624F;color:#fff;
          padding:11px;border-radius:3px;font:inherit;cursor:pointer}
   button:hover{background:#18755F}
@@ -39,7 +46,10 @@
   <p>Сторінка медичної частини КІ НГУ закрита паролем. Після входу ви оберете свій підрозділ і введете власний пароль.</p>
 
   <label for="p">Пароль доступу</label>
-  <input type="password" id="p" autocomplete="current-password" autofocus>
+  <span class="pw-wrap">
+    <input type="password" id="p" autocomplete="current-password" autofocus>
+    <button type="button" class="pw-eye" id="eye" aria-label="Показати пароль" title="Показати пароль"></button>
+  </span>
   <button id="go">Увійти</button>
   <div id="err"></div>
 
@@ -48,6 +58,19 @@
 
 <script>
   const p = document.getElementById("p"), go = document.getElementById("go"), err = document.getElementById("err");
+  const EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 12S5.5 5 12 5s10.2 7 10.2 7-3.7 7-10.2 7S1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 5.2A9.9 9.9 0 0 1 12 5c6.5 0 10.2 7 10.2 7a18.6 18.6 0 0 1-3.3 4.2M6.5 6.7A18.4 18.4 0 0 0 1.8 12S5.5 19 12 19c2 0 3.7-.7 5.1-1.6"/><path d="M10 10a3 3 0 0 0 4 4"/><path d="M3 3l18 18"/></svg>';
+  const eye = document.getElementById("eye");
+  eye.innerHTML = EYE_OPEN;
+  eye.onclick = function(){
+    var show = p.type === "password";
+    p.type = show ? "text" : "password";
+    eye.innerHTML = show ? EYE_OFF : EYE_OPEN;
+    eye.classList.toggle("on", show);
+    eye.setAttribute("aria-label", show ? "Приховати пароль" : "Показати пароль");
+    eye.title = show ? "Приховати пароль" : "Показати пароль";
+    p.focus();
+  };
   const show = m => err.innerHTML = '<div class="err">' + m + '</div>';
   async function send(){
     err.innerHTML = ""; go.disabled = true; go.textContent = "Перевіряю…";
