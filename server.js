@@ -16,6 +16,7 @@ const crypto  = require("crypto");
 const fs      = require("fs");
 const fsp     = require("fs/promises");
 const path    = require("path");
+const zlib    = require("zlib");
 
 const PORT     = process.env.PORT || 3000;
 const PASS     = process.env.APP_PASSWORD;
@@ -251,17 +252,28 @@ app.post("/api/restore", gate, async (req, res) => {
   res.json({ restored: n });
 });
 
-// довідник деталізації МКХ-10: великий сталий файл, віддаємо стисненим і надовго кешуємо
-app.get("/mkh4.json", gate, (req, res) => {
-  const gz = path.join(__dirname, "public", "mkh4.json.gz");
-  res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
-  if (fs.existsSync(gz)) {
-    res.setHeader("Content-Encoding", "gzip");
+/* Великі сталі довідники (МКХ-10, ATC) лежать у стисненому вигляді.
+   Стиснену відповідь віддаємо лише тим клієнтам, які її приймають,
+   решті розпаковуємо на льоту — інакше вони отримають нечитабельні байти. */
+function sendDict(name) {
+  return (req, res) => {
+    const gz = path.join(__dirname, "public", name + ".gz");
+    const plain = path.join(__dirname, "public", name);
+    res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
     res.type("application/json");
-    return res.sendFile(gz);
-  }
-  res.sendFile(path.join(__dirname, "public", "mkh4.json"));
-});
+    if (!fs.existsSync(gz)) return res.sendFile(plain);
+    const accepts = String(req.headers["accept-encoding"] || "").toLowerCase().includes("gzip");
+    if (accepts) {
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      return res.sendFile(gz);
+    }
+    res.setHeader("Vary", "Accept-Encoding");
+    fs.createReadStream(gz).pipe(zlib.createGunzip()).pipe(res);
+  };
+}
+app.get("/mkh4.json", gate, sendDict("mkh4.json"));
+app.get("/atc5.json", gate, sendDict("atc5.json"));
 
 app.get("/healthz", (req, res) => res.type("text").send("ok"));
 
