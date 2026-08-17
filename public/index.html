@@ -414,126 +414,6 @@ textarea{resize:vertical;min-height:60px}
 <div id="modal-root"></div>
 <div id="toast"></div>
 
-
-<script>
-/* ---------------------------------------------------------------
-   Серверне сховище. У Claude застосунок користується window.storage;
-   на Render його немає, тому тут той самий інтерфейс поверх /api/kv.
-   Ключ сесії лишається у браузері, решта — спільна для всіх.
-----------------------------------------------------------------*/
-(function(){
-  var LOCAL = function(k){ return String(k).indexOf("medcrm:sess") === 0; };
-  var revs = {}, syncing = false;
-
-  async function req(method, url, body){
-    var r = await fetch(url, {
-      method: method, credentials: "same-origin",
-      headers: body ? {"Content-Type":"application/json"} : undefined,
-      body: body ? JSON.stringify(body) : undefined
-    });
-    if(r.status === 401){ location.href = "/login"; throw new Error("Потрібен вхід"); }
-    return r;
-  }
-
-  window.storage = {
-    async get(key){
-      if(LOCAL(key)){
-        var v = localStorage.getItem(key);
-        if(v === null) throw new Error("Ключа немає");
-        return {key:key, value:v};
-      }
-      var r = await req("GET", "/api/kv/" + encodeURIComponent(key));
-      if(r.status === 404) throw new Error("Ключа немає");
-      var j = await r.json(); revs[key] = j.rev;
-      return {key:key, value:j.value};
-    },
-    async set(key, value){
-      if(LOCAL(key)){ localStorage.setItem(key, value); return {key:key, value:value}; }
-      var r = await req("PUT", "/api/kv/" + encodeURIComponent(key),
-                        {value:value, rev: revs[key] == null ? null : revs[key]});
-      if(r.status === 409){ conflict(); throw new Error("Дані змінив інший користувач"); }
-      var j = await r.json(); revs[key] = j.rev;
-      return {key:key, value:value};
-    },
-    async delete(key){
-      if(LOCAL(key)){ localStorage.removeItem(key); return {key:key, deleted:true}; }
-      await req("DELETE", "/api/kv/" + encodeURIComponent(key));
-      delete revs[key];
-      return {key:key, deleted:true};
-    },
-    async list(prefix){
-      var r = await req("GET", "/api/kv?prefix=" + encodeURIComponent(prefix || ""));
-      return await r.json();
-    }
-  };
-
-  /* Якщо базу змінив інший підрозділ — тихо перечитуємо дані на місці.
-     Перезавантаження сторінки використовується лише як запасний варіант. */
-  var pulling = false;
-  function busy(){
-    var m = document.getElementById("modal-root");
-    return !!(m && m.innerHTML.length);          // не смикаємо екран, поки відкрите вікно
-  }
-  async function pull(){
-    if(pulling || busy()) return;
-    pulling = true;
-    try{
-      if(window.medcrmSync){ await window.medcrmSync(); note("Дані оновив інший користувач — перелік актуалізовано"); }
-      else location.reload();
-    }catch(e){}
-    pulling = false;
-  }
-  function conflict(){ setTimeout(pull, 50); }
-
-  function note(text){
-    var t = document.createElement("div");
-    t.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:200;background:#14624F;color:#EAF2EC;" +
-      "padding:11px 15px;border-radius:3px;font:13px/1.4 'IBM Plex Sans',system-ui,sans-serif;" +
-      "box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:320px";
-    t.textContent = text;
-    document.body.appendChild(t);
-    setTimeout(function(){ t.remove(); }, 3200);
-  }
-
-  /* дві серверні кнопки в блоці профілю */
-  document.addEventListener("DOMContentLoaded", function(){
-    var box = document.getElementById("meBox");
-    if(!box) return;
-    var add = function(){
-      var acts = box.querySelector(".me-acts");
-      if(!acts || acts.querySelector("[data-srv]")) return;
-      var a = document.createElement("button");
-      a.dataset.srv = "1"; a.textContent = "Копія бази";
-      a.title = "Завантажити резервну копію всієї бази у файл";
-      a.onclick = function(){ location.href = "/api/backup"; };
-      var b = document.createElement("button");
-      b.dataset.srv = "1"; b.textContent = "Вийти з сайту";
-      b.onclick = async function(){ await fetch("/api/logout", {method:"POST"}); location.href = "/login"; };
-      acts.appendChild(a); acts.appendChild(b);
-    };
-    new MutationObserver(add).observe(box, {childList:true, subtree:true});
-    add();
-  });
-
-  /* Раз на 12 секунд питаємо в сервера лише номер версії — це кілька байтів.
-     Саму базу тягнемо тільки тоді, коли її справді хтось змінив. */
-  setInterval(async function(){
-    if(syncing || pulling || document.hidden || busy()) return;
-    syncing = true;
-    try{
-      var key = "medcrm:v1";
-      if(revs[key] != null){
-        var r = await fetch("/api/rev/" + encodeURIComponent(key), {credentials:"same-origin"});
-        if(r.ok){
-          var j = await r.json();
-          if(j.rev > revs[key]) await pull();
-        }
-      }
-    }catch(e){}
-    syncing = false;
-  }, 12000);
-})();
-</script>
 <script>
 "use strict";
 
@@ -925,7 +805,8 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], users:[], role:"apteka", inv:0, req:0, rxNo:0};
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], users:[],
+    org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0};
 }
 async function load(){
   try{
@@ -943,6 +824,7 @@ async function load(){
 }
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
+  if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
   ["items","batches","requests","log","rx","assets","tasks","taskLog","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
@@ -2954,6 +2836,7 @@ function viewReq(){
           <div class="row">
             ${canReview()? `<button class="btn primary sm" data-rev="${r.id}">Перевірити та видати</button>
                             <button class="btn danger sm" data-rxr="${r.id}">Відхилити</button>`:""}
+            <button class="btn sm" data-rxp="${r.id}">Друк</button>
             ${r.docLoc===S.role? `<button class="btn sm" data-rxc="${r.id}">Скасувати</button>`:""}
           </div>
         </div>
@@ -2993,6 +2876,7 @@ function viewReq(){
           <div class="row">
             ${(mine || (ME.admin && exec)) ? `<button class="btn primary sm" data-rxi="${r.id}">Видати ${mine?"свою частину":"за "+LOCS[exec].short}</button>`:""}
             ${(S.role==="apteka" || ME.admin) ? `<button class="btn danger sm" data-rxr="${r.id}">Відхилити</button>`:""}
+            <button class="btn sm" data-rxp="${r.id}">Друк</button>
             ${r.docLoc===S.role? `<button class="btn sm" data-rxc="${r.id}">Скасувати</button>`:""}
           </div>
         </div>
@@ -3012,7 +2896,9 @@ function viewReq(){
       : (revHTML ? "" : `<div class="card"><div class="empty"><strong>Призначень, що потребують вашої участі, немає</strong>${
           canRx ? "Натисніть «Створити призначення», щоб призначити препарат пацієнту." : "Черга порожня."}</div></div>`));
     $("#rbody").querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>reviewRxModal(b.dataset.rev));
+    $("#rbody").querySelectorAll("[data-rxp]").forEach(b=>b.onclick=()=>rxPrint(b.dataset.rxp));
     $("#rbody").querySelectorAll("[data-rxi]").forEach(b=>b.onclick=()=>issueRxModal(b.dataset.rxi));
+    $("#rbody").querySelectorAll("[data-rxp]").forEach(b=>b.onclick=()=>rxPrint(b.dataset.rxp));
     $("#rbody").querySelectorAll("[data-rxr]").forEach(b=>b.onclick=()=>rejectRxModal(b.dataset.rxr));
     $("#rbody").querySelectorAll("[data-rxc]").forEach(b=>b.onclick=()=>{
       const r = S.rx.find(x=>x.id===b.dataset.rxc);
@@ -3167,7 +3053,7 @@ function viewReq(){
       <div class="card" style="margin-bottom:14px"><header><h3>Історія рецептів</h3><span class="spacer"></span>
         <span class="eyebrow">${doneRx.length}</span></header>
         ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Призначив</th><th>Препарати</th>
-            <th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
+            <th>Виписано</th><th>Закрито</th><th>Стан</th><th></th></tr></thead><tbody>
           ${doneRx.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
             <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
@@ -3176,7 +3062,8 @@ function viewReq(){
             <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`
                   + (l.from&&l.from.length?` <span class="sub2 mono">(${esc(l.from.map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · "))})</span>`:"")).join("<br>")}</td>
             <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
-            <td>${statusTag(r)}</td></tr>`).join("")}
+            <td>${statusTag(r)}</td>
+            <td><button class="btn sm" data-rxp="${r.id}">Друк</button></td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>Виданих рецептів ще немає</strong>Тут з'являться виконані, частково виконані та відхилені рецепти.</div>`}
       </div>
       <div class="card"><header><h3>Історія заявок</h3><span class="spacer"></span>
@@ -3190,6 +3077,7 @@ function viewReq(){
         </tbody></table></div>` : `<div class="empty"><strong>Історія заявок порожня</strong>Тут з'являться виконані та відхилені заявки.</div>`}
       </div>`;
     $("#rbody").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>reqDetails(b.dataset.view));
+    $("#rbody").querySelectorAll("[data-rxp]").forEach(b=>b.onclick=()=>rxPrint(b.dataset.rxp));
   }
 }
 function statusTag(r){
@@ -3243,6 +3131,7 @@ function newRxModal(cito){
         <input type="text" id="rx-rank" list="rx-ranks" placeholder="курсант">
         <datalist id="rx-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
       <div class="field"><label>Підрозділ</label><input type="text" id="rx-group" placeholder="1 рота, 2 взвод"></div>
+      <div class="field"><label>Вік</label><input type="number" id="rx-age" min="0" max="120" placeholder="повних років"></div>
       <div class="field" style="grid-column:1/-1"><label>Призначив</label>
         <input type="text" value="${esc(ME.name)} · ${LOCS[S.role].name}" disabled></div>
     </div>
@@ -3431,7 +3320,8 @@ function newRxModal(cito){
     if(dx.badSub) return toast("Код " + dx.badSub + " не належить блоку " + dx.code, true);
     if(!lines.length) return toast("Додайте хоча б один препарат", true);
     const r = {id:uid("x"), no:"Р-"+String(++S.rxNo).padStart(4,"0"), docLoc:S.role, doctor:ME.name,
-      patient:pat, rank:document.getElementById("rx-rank").value.trim(),
+      patient:pat, age:parseInt(document.getElementById("rx-age").value,10) || null,
+      rank:document.getElementById("rx-rank").value.trim(),
       group:document.getElementById("rx-group").value.trim(), cito:!!cito, dx, dxNote:document.getElementById("rx-dxnote").value.trim(),
       comment:$("#rx-com").value.trim(), status: cito ? "pending" : "review", created:Date.now(),
       lines:lines.map(l=>({itemId:l.itemId, want:l.want, got:0}))};
@@ -3479,9 +3369,12 @@ function issueRxModal(id){
         <td class="num"><input type="number" class="mono" data-pt="${k}" step="any" min="0" max="${Math.min(has, need)}" value="${pt.qty}" style="width:100px;text-align:right"></td>
         <td class="sub2 mono">${bs.map(b=>dstr(b.expiry)).join(", ")||"—"}</td></tr>`}).join("")}
     </tbody></table>
-    <p class="sub2" style="margin-top:12px">Списується лише із залишків підрозділу «${LOCS[loc].name}», за принципом FEFO.
+    <p style="margin:12px 0 0"><button type="button" class="btn sm" id="iss-print">Друк бланка ф-1</button></p>
+    <p class="sub2" style="margin-top:10px">Списується лише із залишків підрозділу «${LOCS[loc].name}», за принципом FEFO.
       ${groups.length>1 ? `Решту видасть ${groups.slice(1).map(x=>LOCS[x.loc].name).join(", ")} — рецепт залишиться в черзі.` : ""}</p>`,
     [{t:"Скасувати", f:close},{t:"Видати та списати", cls:"primary", f:go}]);
+
+  document.getElementById("iss-print").onclick = ()=>rxPrint(r.id);
 
   function go(){
     const vals = [...document.querySelectorAll("[data-pt]")].map(i=>parseFloat(i.value)||0);
@@ -3537,9 +3430,11 @@ function reviewRxModal(id){
     </div>
     <div class="field" style="margin-top:12px"><label>Примітка старшої медсестри</label>
       <input type="text" id="rev-note" placeholder="Наприклад: зменшено дозу до наявного фасування"></div>
+    <p style="margin:10px 0 0"><button type="button" class="btn sm" id="rev-print">Друк бланка ф-1</button></p>
     <p class="sub2" style="margin-top:10px">Після погодження медикаменти списуються одразу за ланцюгом ${chain.map(l=>LOCS[l].short).join(" → ")}, у межах підрозділу — за принципом FEFO. Усі правки буде записано в журнал.</p>`,
     [{t:"Скасувати", f:close},{t:"Погодити та списати", cls:"primary", f:approve}]);
 
+  document.getElementById("rev-print").onclick = ()=>rxPrint(r.id);
   const draw = ()=>{
     document.getElementById("rev-lines").innerHTML = lines.length
       ? `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Кількість</th><th class="num">Є</th><th>Спишеться з</th><th></th></tr></thead><tbody>
@@ -3609,6 +3504,246 @@ function reviewRxModal(id){
         : "Списано частково — залишків не вистачило");
     render();
   }
+}
+
+/* ---------- друк рецептурного бланка ф-1 ----------
+   Форма за додатком 1 до Правил виписування рецептів на лікарські засоби
+   і медичні вироби (пункт 7 розділу I). */
+function orgModal(){
+  if(!ME.admin) return;
+  const g = S.org || {};
+  modal("Реквізити закладу для рецептурного бланка", `
+    <p class="sub2" style="margin-top:0">Ці дані підставляються у шапку рецептурного бланка ф-1 під час друку.</p>
+    <div class="field" style="margin-bottom:11px"><label>Найменування закладу охорони здоров'я</label>
+      <input type="text" id="o-name" value="${esc(g.name||"")}" placeholder="Медична частина КІ НГУ"></div>
+    <div class="field" style="margin-bottom:11px"><label>Місцезнаходження</label>
+      <input type="text" id="o-addr" value="${esc(g.addr||"")}" placeholder="вул., буд., населений пункт, область, індекс"></div>
+    <div class="grid g2">
+      <div class="field"><label>Код за ЄДРПОУ</label>
+        <input type="text" id="o-edrpou" value="${esc(g.edrpou||"")}"></div>
+      <div class="field"><label>Ліцензія на медичну практику</label>
+        <input type="text" id="o-lic" value="${esc(g.lic||"")}" placeholder="номер і дата видачі"></div>
+    </div>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      S.org = {
+        name: document.getElementById("o-name").value.trim(),
+        addr: document.getElementById("o-addr").value.trim(),
+        edrpou: document.getElementById("o-edrpou").value.trim(),
+        lic: document.getElementById("o-lic").value.trim()
+      };
+      log("Система", "Оновлено реквізити закладу для рецептурних бланків");
+      close(); toast("Збережено"); render();
+    }}]);
+}
+
+function rxPrint(id){
+  const r = (S.rx||[]).find(x=>x.id===id);
+  if(!r) return;
+  const g = S.org || {};
+  const d = new Date(r.created);
+  const line = (label, val) => `<div class="fl"><span class="lb">${label}</span><span class="vl">${val || "&nbsp;"}</span></div>`;
+  const rp = r.lines.map(l=>{
+    const it = item(l.itemId);
+    return `<div class="rp"><b>Rp:</b> <span class="nm">${esc(it.name)}</span>
+      <div class="dn">D.t.d. № ${qty(l.want)} (${esc(it.unit)})</div>
+      <div class="sg">S. ${esc(r.comment || "за призначенням лікаря")}</div></div>`;
+  }).join("");
+  const empty = Math.max(0, 3 - r.lines.length);
+
+  const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8">
+<title>Рецепт ${r.no}</title>
+<style>
+  @page{size:A5 portrait;margin:10mm}
+  *{box-sizing:border-box}
+  body{font:11px/1.35 "Times New Roman",Times,serif;color:#000;margin:0;padding:4mm}
+  .hd{font-size:8.5px;line-height:1.3}
+  .fl{display:flex;gap:4px;align-items:flex-end;margin-bottom:3px}
+  .lb{white-space:nowrap}
+  .vl{flex:1;border-bottom:.6px solid #000;min-height:13px;padding:0 3px;font-size:11px}
+  .ttl{text-align:center;font-size:15px;font-weight:bold;letter-spacing:.5px;margin:7px 0 4px}
+  .rowb{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;margin-bottom:5px}
+  .pay div{margin-bottom:2px}
+  .box{display:inline-block;width:9px;height:9px;border:.8px solid #000;margin-right:4px;vertical-align:-1px}
+  .rp{border-left:1.4px solid #000;padding:3px 0 5px 7px;margin-bottom:6px;min-height:34px}
+  .rp .nm{font-size:12px}
+  .dn,.sg{padding-left:16px;font-size:10.5px}
+  .rp.blank{min-height:34px}
+  .rp.blank .ln{border-bottom:.6px solid #000;height:12px;margin:2px 0 0 16px}
+  .ft{margin-top:6px;font-size:9px}
+  .sign{display:flex;justify-content:space-between;margin-top:12px;gap:14px}
+  .sign div{flex:1;border-top:.6px solid #000;padding-top:2px;text-align:center;font-size:8px}
+  .note{margin-top:8px;font-size:7px;line-height:1.3;color:#000}
+  @media print{ .noprint{display:none} }
+  .noprint{position:fixed;top:8px;right:8px;font-family:system-ui,sans-serif}
+  .noprint button{padding:7px 13px;cursor:pointer}
+</style></head><body>
+<div class="noprint"><button onclick="window.print()">Друк</button></div>
+
+<div class="hd">
+  ${line("", esc(g.name||""))}
+  <div style="font-size:7.5px;margin:-2px 0 4px">Найменування закладу охорони здоров'я</div>
+  ${line("", esc(g.addr||""))}
+  <div style="font-size:7.5px;margin:-2px 0 4px">Місцезнаходження закладу охорони здоров'я</div>
+  ${line("Код за ЄДРПОУ", esc(g.edrpou||""))}
+  ${line("Ліцензія на медичну практику", esc(g.lic||""))}
+</div>
+
+<div class="ttl">РЕЦЕПТ № ${esc(r.no)}</div>
+
+<div class="rowb">
+  <div>дорослий, дитячий <span style="font-size:8px">(потрібне підкреслити)</span></div>
+  <div>«${pad2(d.getDate())}» ${MON[d.getMonth()]} ${d.getFullYear()} р.</div>
+</div>
+
+<div class="pay" style="margin-bottom:5px">
+  <div><span class="box"></span>За повну вартість</div>
+  <div><span class="box"></span>Безоплатно &nbsp; джерело фінансування: ${esc(g.name||"")}</div>
+  <div><span class="box"></span>З доплатою &nbsp; джерело фінансування _____________________</div>
+</div>
+
+${line("Прізвище, ініціали та вік пацієнта", esc(r.patient) + (r.age ? ", " + r.age + " р." : "") + (patientLine(r) ? " (" + esc(patientLine(r)) + ")" : ""))}
+${line("Прізвище та ініціали медичного працівника", esc(r.doctor))}
+${r.dx ? line("Діагноз за МКХ-10", esc(r.dx.det||r.dx.sub||r.dx.code) + " " + esc(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name))) : ""}
+
+${rp}
+${[...Array(empty)].map(()=>`<div class="rp blank"><b>Rp:</b><div class="ln"></div><div class="ln"></div></div>`).join("")}
+
+<div class="ft">${line("Додаткова інформація", r.cito ? "CITO! — терміново" : "")}</div>
+
+<div class="sign">
+  <div>Підпис медичного працівника та печатка</div>
+  <div>Отримав</div>
+</div>
+
+<div class="note">Форма рецептурного бланка № 1 (ф-1) — додаток 1 до Правил виписування рецептів на лікарські засоби і медичні вироби (пункт 7 розділу I).</div>
+
+<script>
+/* ---------------------------------------------------------------
+   Серверне сховище. У Claude застосунок користується window.storage;
+   на Render його немає, тому тут той самий інтерфейс поверх /api/kv.
+   Ключ сесії лишається у браузері, решта — спільна для всіх.
+----------------------------------------------------------------*/
+(function(){
+  var LOCAL = function(k){ return String(k).indexOf("medcrm:sess") === 0; };
+  var revs = {}, syncing = false;
+
+  async function req(method, url, body){
+    var r = await fetch(url, {
+      method: method, credentials: "same-origin",
+      headers: body ? {"Content-Type":"application/json"} : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if(r.status === 401){ location.href = "/login"; throw new Error("Потрібен вхід"); }
+    return r;
+  }
+
+  window.storage = {
+    async get(key){
+      if(LOCAL(key)){
+        var v = localStorage.getItem(key);
+        if(v === null) throw new Error("Ключа немає");
+        return {key:key, value:v};
+      }
+      var r = await req("GET", "/api/kv/" + encodeURIComponent(key));
+      if(r.status === 404) throw new Error("Ключа немає");
+      var j = await r.json(); revs[key] = j.rev;
+      return {key:key, value:j.value};
+    },
+    async set(key, value){
+      if(LOCAL(key)){ localStorage.setItem(key, value); return {key:key, value:value}; }
+      var r = await req("PUT", "/api/kv/" + encodeURIComponent(key),
+                        {value:value, rev: revs[key] == null ? null : revs[key]});
+      if(r.status === 409){ conflict(); throw new Error("Дані змінив інший користувач"); }
+      var j = await r.json(); revs[key] = j.rev;
+      return {key:key, value:value};
+    },
+    async delete(key){
+      if(LOCAL(key)){ localStorage.removeItem(key); return {key:key, deleted:true}; }
+      await req("DELETE", "/api/kv/" + encodeURIComponent(key));
+      delete revs[key];
+      return {key:key, deleted:true};
+    },
+    async list(prefix){
+      var r = await req("GET", "/api/kv?prefix=" + encodeURIComponent(prefix || ""));
+      return await r.json();
+    }
+  };
+
+  /* Якщо базу змінив інший підрозділ — тихо перечитуємо дані на місці.
+     Перезавантаження сторінки використовується лише як запасний варіант. */
+  var pulling = false;
+  function busy(){
+    var m = document.getElementById("modal-root");
+    return !!(m && m.innerHTML.length);          // не смикаємо екран, поки відкрите вікно
+  }
+  async function pull(){
+    if(pulling || busy()) return;
+    pulling = true;
+    try{
+      if(window.medcrmSync){ await window.medcrmSync(); note("Дані оновив інший користувач — перелік актуалізовано"); }
+      else location.reload();
+    }catch(e){}
+    pulling = false;
+  }
+  function conflict(){ setTimeout(pull, 50); }
+
+  function note(text){
+    var t = document.createElement("div");
+    t.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:200;background:#14624F;color:#EAF2EC;" +
+      "padding:11px 15px;border-radius:3px;font:13px/1.4 'IBM Plex Sans',system-ui,sans-serif;" +
+      "box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:320px";
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 3200);
+  }
+
+  /* дві серверні кнопки в блоці профілю */
+  document.addEventListener("DOMContentLoaded", function(){
+    var box = document.getElementById("meBox");
+    if(!box) return;
+    var add = function(){
+      var acts = box.querySelector(".me-acts");
+      if(!acts || acts.querySelector("[data-srv]")) return;
+      var a = document.createElement("button");
+      a.dataset.srv = "1"; a.textContent = "Копія бази";
+      a.title = "Завантажити резервну копію всієї бази у файл";
+      a.onclick = function(){ location.href = "/api/backup"; };
+      var b = document.createElement("button");
+      b.dataset.srv = "1"; b.textContent = "Вийти з сайту";
+      b.onclick = async function(){ await fetch("/api/logout", {method:"POST"}); location.href = "/login"; };
+      acts.appendChild(a); acts.appendChild(b);
+    };
+    new MutationObserver(add).observe(box, {childList:true, subtree:true});
+    add();
+  });
+
+  /* Раз на 12 секунд питаємо в сервера лише номер версії — це кілька байтів.
+     Саму базу тягнемо тільки тоді, коли її справді хтось змінив. */
+  setInterval(async function(){
+    if(syncing || pulling || document.hidden || busy()) return;
+    syncing = true;
+    try{
+      var key = "medcrm:v1";
+      if(revs[key] != null){
+        var r = await fetch("/api/rev/" + encodeURIComponent(key), {credentials:"same-origin"});
+        if(r.ok){
+          var j = await r.json();
+          if(j.rev > revs[key]) await pull();
+        }
+      }
+    }catch(e){}
+    syncing = false;
+  }, 12000);
+})();
+</script>
+<script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  if(!w) return toast("Дозвольте спливні вікна, щоб надрукувати рецепт", true);
+  w.document.write(html); w.document.close();
+  log("Рецепт", `Роздруковано рецептурний бланк ${r.no} (пацієнт ${r.patient})`, {rx:r.no});
+  save();
 }
 
 function rejectRxModal(id){
@@ -4036,6 +4171,7 @@ function viewHist(){
     XLSX.writeFile(wb, "zhurnal-" + new Date().toISOString().slice(0,10) + ".xlsx");
     toast("Журнал вивантажено");
   });
+  if(ME.admin) act("Реквізити закладу", orgModal);
   if(ME.admin) act("Очищення даних", ()=>{
     const opts = [
       ["batches","Залишки медикаментів (усі підрозділи)", true],
