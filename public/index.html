@@ -414,6 +414,126 @@ textarea{resize:vertical;min-height:60px}
 <div id="modal-root"></div>
 <div id="toast"></div>
 
+
+<script>
+/* ---------------------------------------------------------------
+   Серверне сховище. У Claude застосунок користується window.storage;
+   на Render його немає, тому тут той самий інтерфейс поверх /api/kv.
+   Ключ сесії лишається у браузері, решта — спільна для всіх.
+----------------------------------------------------------------*/
+(function(){
+  var LOCAL = function(k){ return String(k).indexOf("medcrm:sess") === 0; };
+  var revs = {}, syncing = false;
+
+  async function req(method, url, body){
+    var r = await fetch(url, {
+      method: method, credentials: "same-origin",
+      headers: body ? {"Content-Type":"application/json"} : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if(r.status === 401){ location.href = "/login"; throw new Error("Потрібен вхід"); }
+    return r;
+  }
+
+  window.storage = {
+    async get(key){
+      if(LOCAL(key)){
+        var v = localStorage.getItem(key);
+        if(v === null) throw new Error("Ключа немає");
+        return {key:key, value:v};
+      }
+      var r = await req("GET", "/api/kv/" + encodeURIComponent(key));
+      if(r.status === 404) throw new Error("Ключа немає");
+      var j = await r.json(); revs[key] = j.rev;
+      return {key:key, value:j.value};
+    },
+    async set(key, value){
+      if(LOCAL(key)){ localStorage.setItem(key, value); return {key:key, value:value}; }
+      var r = await req("PUT", "/api/kv/" + encodeURIComponent(key),
+                        {value:value, rev: revs[key] == null ? null : revs[key]});
+      if(r.status === 409){ conflict(); throw new Error("Дані змінив інший користувач"); }
+      var j = await r.json(); revs[key] = j.rev;
+      return {key:key, value:value};
+    },
+    async delete(key){
+      if(LOCAL(key)){ localStorage.removeItem(key); return {key:key, deleted:true}; }
+      await req("DELETE", "/api/kv/" + encodeURIComponent(key));
+      delete revs[key];
+      return {key:key, deleted:true};
+    },
+    async list(prefix){
+      var r = await req("GET", "/api/kv?prefix=" + encodeURIComponent(prefix || ""));
+      return await r.json();
+    }
+  };
+
+  /* Якщо базу змінив інший підрозділ — тихо перечитуємо дані на місці.
+     Перезавантаження сторінки використовується лише як запасний варіант. */
+  var pulling = false;
+  function busy(){
+    var m = document.getElementById("modal-root");
+    return !!(m && m.innerHTML.length);          // не смикаємо екран, поки відкрите вікно
+  }
+  async function pull(){
+    if(pulling || busy()) return;
+    pulling = true;
+    try{
+      if(window.medcrmSync){ await window.medcrmSync(); note("Дані оновив інший користувач — перелік актуалізовано"); }
+      else location.reload();
+    }catch(e){}
+    pulling = false;
+  }
+  function conflict(){ setTimeout(pull, 50); }
+
+  function note(text){
+    var t = document.createElement("div");
+    t.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:200;background:#14624F;color:#EAF2EC;" +
+      "padding:11px 15px;border-radius:3px;font:13px/1.4 'IBM Plex Sans',system-ui,sans-serif;" +
+      "box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:320px";
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 3200);
+  }
+
+  /* дві серверні кнопки в блоці профілю */
+  document.addEventListener("DOMContentLoaded", function(){
+    var box = document.getElementById("meBox");
+    if(!box) return;
+    var add = function(){
+      var acts = box.querySelector(".me-acts");
+      if(!acts || acts.querySelector("[data-srv]")) return;
+      var a = document.createElement("button");
+      a.dataset.srv = "1"; a.textContent = "Копія бази";
+      a.title = "Завантажити резервну копію всієї бази у файл";
+      a.onclick = function(){ location.href = "/api/backup"; };
+      var b = document.createElement("button");
+      b.dataset.srv = "1"; b.textContent = "Вийти з сайту";
+      b.onclick = async function(){ await fetch("/api/logout", {method:"POST"}); location.href = "/login"; };
+      acts.appendChild(a); acts.appendChild(b);
+    };
+    new MutationObserver(add).observe(box, {childList:true, subtree:true});
+    add();
+  });
+
+  /* Раз на 12 секунд питаємо в сервера лише номер версії — це кілька байтів.
+     Саму базу тягнемо тільки тоді, коли її справді хтось змінив. */
+  setInterval(async function(){
+    if(syncing || pulling || document.hidden || busy()) return;
+    syncing = true;
+    try{
+      var key = "medcrm:v1";
+      if(revs[key] != null){
+        var r = await fetch("/api/rev/" + encodeURIComponent(key), {credentials:"same-origin"});
+        if(r.ok){
+          var j = await r.json();
+          if(j.rev > revs[key]) await pull();
+        }
+      }
+    }catch(e){}
+    syncing = false;
+  }, 12000);
+})();
+</script>
 <script>
 "use strict";
 
@@ -3616,127 +3736,7 @@ ${[...Array(empty)].map(()=>`<div class="rp blank"><b>Rp:</b><div class="ln"></d
 </div>
 
 <div class="note">Форма рецептурного бланка № 1 (ф-1) — додаток 1 до Правил виписування рецептів на лікарські засоби і медичні вироби (пункт 7 розділу I).</div>
-
-<script>
-/* ---------------------------------------------------------------
-   Серверне сховище. У Claude застосунок користується window.storage;
-   на Render його немає, тому тут той самий інтерфейс поверх /api/kv.
-   Ключ сесії лишається у браузері, решта — спільна для всіх.
-----------------------------------------------------------------*/
-(function(){
-  var LOCAL = function(k){ return String(k).indexOf("medcrm:sess") === 0; };
-  var revs = {}, syncing = false;
-
-  async function req(method, url, body){
-    var r = await fetch(url, {
-      method: method, credentials: "same-origin",
-      headers: body ? {"Content-Type":"application/json"} : undefined,
-      body: body ? JSON.stringify(body) : undefined
-    });
-    if(r.status === 401){ location.href = "/login"; throw new Error("Потрібен вхід"); }
-    return r;
-  }
-
-  window.storage = {
-    async get(key){
-      if(LOCAL(key)){
-        var v = localStorage.getItem(key);
-        if(v === null) throw new Error("Ключа немає");
-        return {key:key, value:v};
-      }
-      var r = await req("GET", "/api/kv/" + encodeURIComponent(key));
-      if(r.status === 404) throw new Error("Ключа немає");
-      var j = await r.json(); revs[key] = j.rev;
-      return {key:key, value:j.value};
-    },
-    async set(key, value){
-      if(LOCAL(key)){ localStorage.setItem(key, value); return {key:key, value:value}; }
-      var r = await req("PUT", "/api/kv/" + encodeURIComponent(key),
-                        {value:value, rev: revs[key] == null ? null : revs[key]});
-      if(r.status === 409){ conflict(); throw new Error("Дані змінив інший користувач"); }
-      var j = await r.json(); revs[key] = j.rev;
-      return {key:key, value:value};
-    },
-    async delete(key){
-      if(LOCAL(key)){ localStorage.removeItem(key); return {key:key, deleted:true}; }
-      await req("DELETE", "/api/kv/" + encodeURIComponent(key));
-      delete revs[key];
-      return {key:key, deleted:true};
-    },
-    async list(prefix){
-      var r = await req("GET", "/api/kv?prefix=" + encodeURIComponent(prefix || ""));
-      return await r.json();
-    }
-  };
-
-  /* Якщо базу змінив інший підрозділ — тихо перечитуємо дані на місці.
-     Перезавантаження сторінки використовується лише як запасний варіант. */
-  var pulling = false;
-  function busy(){
-    var m = document.getElementById("modal-root");
-    return !!(m && m.innerHTML.length);          // не смикаємо екран, поки відкрите вікно
-  }
-  async function pull(){
-    if(pulling || busy()) return;
-    pulling = true;
-    try{
-      if(window.medcrmSync){ await window.medcrmSync(); note("Дані оновив інший користувач — перелік актуалізовано"); }
-      else location.reload();
-    }catch(e){}
-    pulling = false;
-  }
-  function conflict(){ setTimeout(pull, 50); }
-
-  function note(text){
-    var t = document.createElement("div");
-    t.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:200;background:#14624F;color:#EAF2EC;" +
-      "padding:11px 15px;border-radius:3px;font:13px/1.4 'IBM Plex Sans',system-ui,sans-serif;" +
-      "box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:320px";
-    t.textContent = text;
-    document.body.appendChild(t);
-    setTimeout(function(){ t.remove(); }, 3200);
-  }
-
-  /* дві серверні кнопки в блоці профілю */
-  document.addEventListener("DOMContentLoaded", function(){
-    var box = document.getElementById("meBox");
-    if(!box) return;
-    var add = function(){
-      var acts = box.querySelector(".me-acts");
-      if(!acts || acts.querySelector("[data-srv]")) return;
-      var a = document.createElement("button");
-      a.dataset.srv = "1"; a.textContent = "Копія бази";
-      a.title = "Завантажити резервну копію всієї бази у файл";
-      a.onclick = function(){ location.href = "/api/backup"; };
-      var b = document.createElement("button");
-      b.dataset.srv = "1"; b.textContent = "Вийти з сайту";
-      b.onclick = async function(){ await fetch("/api/logout", {method:"POST"}); location.href = "/login"; };
-      acts.appendChild(a); acts.appendChild(b);
-    };
-    new MutationObserver(add).observe(box, {childList:true, subtree:true});
-    add();
-  });
-
-  /* Раз на 12 секунд питаємо в сервера лише номер версії — це кілька байтів.
-     Саму базу тягнемо тільки тоді, коли її справді хтось змінив. */
-  setInterval(async function(){
-    if(syncing || pulling || document.hidden || busy()) return;
-    syncing = true;
-    try{
-      var key = "medcrm:v1";
-      if(revs[key] != null){
-        var r = await fetch("/api/rev/" + encodeURIComponent(key), {credentials:"same-origin"});
-        if(r.ok){
-          var j = await r.json();
-          if(j.rev > revs[key]) await pull();
-        }
-      }
-    }catch(e){}
-    syncing = false;
-  }, 12000);
-})();
-</script>
-<script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script>
+<scr" + "ipt>window.onload=function(){setTimeout(function(){window.print();},250);};<\/scr" + "ipt>
 </body></html>`;
 
   const w = window.open("", "_blank");
