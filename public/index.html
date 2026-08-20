@@ -898,7 +898,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 17.08.2026";
+const BUILD = "збірка 18.08.2026";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -1857,7 +1857,7 @@ function termsStrip(root){
 /* =========== ВКЛАДКА 2: АПТЕКА =========== */
 function viewApteka(){
   if(S.role==="apteka"){
-    act("Завантажити накладну", importModal).classList.add("primary");
+    act("Завантажити накладну", ()=>importModal()).classList.add("primary");
     act("Додати вручну", ()=>manualModal());
   }
   if(ME.admin) act("Підібрати коди ATC", atcBulkModal);
@@ -2147,13 +2147,15 @@ function xlDate(v){
 }
 const num = v => { if(typeof v==="number") return v; const n = parseFloat(String(v==null?"":v).replace(/\s/g,"").replace(",",".")); return isNaN(n)?0:n; };
 
-function importModal(){
-  modal("Завантаження накладної", `
+function importModal(fixed){
+  if(!(fixed && LOCS[fixed])) fixed = null;   // кнопка може передати подію кліку
+  modal(fixed ? `Оприбуткування — ${LOCS[fixed].name}` : "Завантаження накладної", `
     <div class="grid g2" style="margin-bottom:14px">
       <div class="field"><label>Номер / назва накладної</label>
         <input type="text" id="invno" value="НК-${String((S.inv||0)+1).padStart(3,"0")} від ${dstr(new Date())}"></div>
       <div class="field"><label>Куди оприбуткувати</label>
-        <select id="invloc">${STOCK.map(l=>`<option value="${l}" ${l==="apteka"?"selected":""}>${LOCS[l].name}</option>`).join("")}</select></div>
+        ${fixed ? `<input type="text" value="${LOCS[fixed].name}" disabled><input type="hidden" id="invloc" value="${fixed}">`
+                : `<select id="invloc">${STOCK.map(l=>`<option value="${l}" ${l==="apteka"?"selected":""}>${LOCS[l].name}</option>`).join("")}</select>`}</div>
     </div>
     <div class="drop" id="drop">
       <strong>Перетягніть файл Excel або натисніть, щоб вибрати</strong>
@@ -2218,7 +2220,7 @@ function importModal(){
       <div class="pad"><button class="btn primary" id="commit">Оприбуткувати ${rows.length} рядків</button></div></div>`;
     $("#commit").onclick = ()=>{
       const inv = $("#invno").value.trim() || "без номера";
-      const dest = $("#invloc") ? $("#invloc").value : "apteka";
+      const dest = fixed || ($("#invloc") ? $("#invloc").value : "apteka");
       rows.forEach(r=>{ const it = findItem(r.name, r.nomen, r.unit); addBatch(dest, it.id, r.qty, r.price, r.exp, inv); });
       S.inv = (S.inv||0)+1;
       log("Надходження", `${LOCS[dest].name}: за накладною ${inv} оприбутковано ${rows.length} позицій на суму ${money(sum)} грн`, {inv, count:rows.length, sum, loc:dest});
@@ -2461,7 +2463,8 @@ function viewUnits(){
     $("#ubody").innerHTML = `<div class="card"><header><h3>${LOCS[cur].name} — медикаменти на залишках</h3>
         <span class="spacer"></span>
         <span class="eyebrow" style="margin-right:6px">${rows.length} позицій · ${qty(u.qty)} од. · ${money(u.sum)} грн</span>
-        ${canEdit? `<button class="btn sm" id="u-woff">Списати по накладній</button>`:""}</header>
+        ${canEdit? `<button class="btn sm" id="u-win">Оприбуткувати з Excel</button>
+                    <button class="btn sm" id="u-woff">Списати по накладній</button>`:""}</header>
       ${rows.length ? `<div class="tw"><table><thead><tr>
           <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th>
           <th>Партії та терміни придатності</th><th class="num">Сума, грн</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
@@ -2481,6 +2484,7 @@ function viewUnits(){
     </div>`;
     $("#ubody").querySelectorAll("[data-off]").forEach(b=>b.onclick=()=>writeOffModal(cur, b.dataset.off));
     if(canEdit && document.getElementById("u-woff")) document.getElementById("u-woff").onclick = ()=>writeOffImportModal(cur);
+    if(canEdit && document.getElementById("u-win")) document.getElementById("u-win").onclick = ()=>importModal(cur);
   }
 
   /* ланцюг «старша медсестра → пост» */
