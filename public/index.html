@@ -2636,7 +2636,12 @@ function writeOffImportModal(loc){
       <input type="file" id="w-file" accept=".xlsx,.xls,.csv" hidden>
     </div>
     <div style="margin-top:12px"><button class="btn sm" id="w-tpl">Завантажити шаблон</button></div>
-    <div id="w-prev" style="margin-top:14px"></div>`,
+    <div id="w-prev" style="margin-top:14px"></div>
+    <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
+      <span class="sub2">Переоблік: якщо перелік заводиться заново, залишок можна обнулити повністю —
+        ${rows.length} позицій, ${qty(rows.reduce((a,b)=>a+b.qty,0))} од.</span>
+      <div style="margin-top:7px"><button class="btn sm danger" id="w-all">Списати весь залишок підрозділу</button></div>
+    </div>`,
     [{t:"Закрити", f:close}]);
 
   const drop = document.getElementById("w-drop"), file = document.getElementById("w-file");
@@ -2645,6 +2650,25 @@ function writeOffImportModal(loc){
   drop.ondragleave = ()=>drop.classList.remove("over");
   drop.ondrop = e=>{e.preventDefault(); drop.classList.remove("over"); if(e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);};
   file.onchange = e=>{ if(e.target.files[0]) read(e.target.files[0]); };
+  document.getElementById("w-all").onclick = ()=>{
+    const why0 = document.getElementById("w-why").value.trim();
+    modal(`Обнулення залишку — ${LOCS[loc].name}`, `
+      <p style="margin-top:0">Буде списано <b>всі ${rows.length} позицій</b> (${qty(rows.reduce((a,b)=>a+b.qty,0))} од.)
+        із залишків підрозділу «${LOCS[loc].name}». Каталог препаратів, заявки та журнал не зачіпаються.</p>
+      <div class="field" style="margin-top:12px"><label>Підстава</label>
+        <input type="text" id="wa-why" value="${esc(why0)}" placeholder="Наприклад: переоблік, залишок вноситься заново"></div>
+      <p class="sub2" style="margin-top:10px">Дію не можна скасувати. Якщо потрібен запис попереднього стану — спершу зробіть копію бази.</p>`,
+      [{t:"Скасувати", f:()=>{ close(); writeOffImportModal(loc); }},
+       {t:"Обнулити залишок", cls:"danger", f:()=>{
+        const why = document.getElementById("wa-why").value.trim() || "переоблік";
+        const list = stockRows(loc);
+        if(!list.length){ close(); return toast("Залишків немає", true); }
+        const total = list.reduce((a,b)=>a+b.qty,0);
+        list.forEach(x => takeFEFO(loc, x.itemId, x.qty));
+        log("Списання", `${LOCS[loc].name}: обнулено залишок — ${list.length} позицій, ${qty(total)} од. Підстава: ${why}`);
+        close(); toast("Залишок обнулено: " + list.length + " позицій"); render();
+      }}]);
+  };
   document.getElementById("w-tpl").onclick = ()=>{
     const aoa = [["Назва препарату","Номенклатурний номер","Кількість"]]
       .concat(rows.slice(0,5).map(r=>[r.item.name, r.item.nomen, ""]));
