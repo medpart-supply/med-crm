@@ -902,7 +902,7 @@ const BUILD = "збірка 18.08.2026";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
-let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine"};
+let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine", jour:"temp", jourF:"out"};
 let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:""};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
@@ -927,7 +927,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0};
 }
 async function load(){
@@ -947,7 +947,7 @@ async function load(){
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
-  ["items","batches","requests","log","rx","assets","tasks","taskLog","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
@@ -981,7 +981,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -1633,12 +1633,14 @@ const TABS = [
   {id:"units",  n:"Філії"},
   {id:"req",    n:"Запити"},
   {id:"terms",  n:"Терміни виконання"},
+  {id:"jour",   n:"Журнали"},
   {id:"hist",   n:"Історія"}
 ];
 const TITLES = {
   dash:["Основний командний пункт (ОКП)","Терміни придатності, залишки підрозділів і заявки в очікуванні"],
   apteka:["Аптека","Основний склад: партії на залишках і каталог препаратів"],
   units:["Філії","Медикаменти на руках у підрозділів: кількість, партії та терміни придатності"],
+  jour:["Журнали","Книги обліку медичної частини"],
   terms:["Терміни виконання","Періодичні донесення та звіти: періодичність, підстава, стан виконання"],
   req:["Запити","Заявки та рецепти підрозділів, історія їх виконання"],
   hist:["Історія","Повний журнал маніпуляцій у системі"]
@@ -1696,7 +1698,7 @@ function render(){
   $("#actions").innerHTML = "";
   $("#view").innerHTML = "";
 
-  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, terms:viewTerms, hist:viewHist})[tab]();
+  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, terms:viewTerms, jour:viewJour, hist:viewHist})[tab]();
   save();
 }
 
@@ -3841,6 +3843,203 @@ function reqDetails(id){
     </tbody></table>`, [{t:"Закрити", f:close}]);
 }
 
+/* =========== ВКЛАДКА: ЖУРНАЛИ =========== */
+/* Перший журнал — книга видачі матеріальних цінностей у тимчасове використання. */
+const tempAll = () => (S.temp || []);
+const tempOpen = r => !r.back;
+const tempOver = r => tempOpen(r) && r.due && daysLeft(r.due) < 0;
+
+function tempState(r){
+  if(r.back) return {k:"back", cls:"ok", label:"Повернено " + dstr(r.back)};
+  if(!r.due) return {k:"out", cls:"acc", label:"У користуванні"};
+  const d = daysLeft(r.due);
+  if(d < 0)  return {k:"over", cls:"crit", label:"Прострочено на " + Math.abs(d) + " дн."};
+  if(d <= 3) return {k:"soon", cls:"warn", label:"Повернути через " + d + " дн."};
+  return {k:"out", cls:"acc", label:"У користуванні до " + dstr(r.due)};
+}
+
+function viewJour(){
+  const mine = ME.admin ? tempAll() : tempAll().filter(r => r.loc === ME.loc);
+  const f = sub.jourF;
+  const rows = mine.filter(r => f === "all" ? true : f === "out" ? tempOpen(r) : !!r.back)
+    .sort((a,b) => (tempOpen(b) ? 1 : 0) - (tempOpen(a) ? 1 : 0) || b.out - a.out);
+  const out = mine.filter(tempOpen).length, over = mine.filter(tempOver).length;
+
+  act("Видати у тимчасове використання", ()=>tempModal(null)).classList.add("primary");
+  act("Експорт книги", exportTemp);
+
+  const v = $("#view");
+  v.insertAdjacentHTML("beforeend", `
+    <div class="row" style="margin-bottom:14px">
+      <div class="seg">
+        <button data-j="temp" class="on">Видача МЦ у тимчасове використання</button>
+      </div>
+    </div>
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="stat acc"><div class="eyebrow">На руках</div><div class="v">${out}</div>
+        <div class="n">не повернуто</div></div>
+      <div class="stat ${over?"crit":"ok"}"><div class="eyebrow">Прострочено</div><div class="v">${over}</div>
+        <div class="n">строк повернення минув</div></div>
+      <div class="stat"><div class="eyebrow">Повернуто</div><div class="v">${mine.filter(r=>r.back).length}</div>
+        <div class="n">закритих записів</div></div>
+      <div class="stat"><div class="eyebrow">Усього записів</div><div class="v">${mine.length}</div>
+        <div class="n">${ME.admin ? "усі підрозділи" : LOCS[ME.loc].name}</div></div>
+    </div>
+    <div class="row" style="margin-bottom:14px"><div class="seg">
+      <button data-jf="out" class="${f==="out"?"on":""}">На руках (${mine.filter(tempOpen).length})</button>
+      <button data-jf="back" class="${f==="back"?"on":""}">Повернуто (${mine.filter(r=>r.back).length})</button>
+      <button data-jf="all" class="${f==="all"?"on":""}">Усі записи</button>
+    </div></div>
+    <div id="jbody"></div>`);
+  v.querySelectorAll("[data-jf]").forEach(b=>b.onclick=()=>{sub.jourF=b.dataset.jf; render();});
+
+  $("#jbody").innerHTML = rows.length ? `<div class="card">
+      <header><h3>Книга видачі матеріальних цінностей у тимчасове використання</h3>
+        <span class="spacer"></span><span class="eyebrow">${rows.length} записів</span></header>
+      <div class="tw" style="max-height:none"><table><thead><tr>
+        <th>№</th><th>Найменування МЦ</th><th class="num">К-сть</th><th>Кому видано</th>
+        <th>Видав</th><th>Видано</th><th>Повернути до</th><th>Стан</th><th></th></tr></thead><tbody>
+      ${rows.map(r=>{const st=tempState(r); return `<tr>
+        <td class="mono">${esc(r.no)}</td>
+        <td class="name">${esc(r.item)}${r.inv?`<div class="sub2 mono">інв. № ${esc(r.inv)}</div>`:""}
+          ${r.note?`<div class="sub2">${esc(r.note)}</div>`:""}</td>
+        <td class="num">${qty(r.qty)} ${esc(r.unit||"шт")}</td>
+        <td>${esc(r.to)}${r.toRank||r.toUnit?`<div class="sub2">${esc([r.toRank,r.toUnit].filter(Boolean).join(" · "))}</div>`:""}</td>
+        <td class="sub2">${esc(r.by)}<div class="sub2">${LOCS[r.loc]?LOCS[r.loc].name:""}</div></td>
+        <td class="mono sub2">${dstr(r.out)}</td>
+        <td class="mono sub2">${r.due?dstr(r.due):"—"}</td>
+        <td><span class="tag ${st.cls}"><span class="dot"></span>${esc(st.label)}</span>
+          ${r.back?`<div class="sub2">прийняв ${esc(r.backBy||"")}</div>`:""}</td>
+        <td style="white-space:nowrap;text-align:right">
+          ${tempOpen(r) ? `<button class="btn sm primary" data-tb="${r.id}">Повернено</button>
+                           <button class="btn sm" data-te="${r.id}">Змінити</button>` : ""}
+          ${ME.admin ? `<button class="btn sm danger" data-td="${r.id}">Вилучити</button>` : ""}
+        </td></tr>`}).join("")}
+    </tbody></table></div></div>`
+    : `<div class="card"><div class="empty"><strong>${mine.length ? "За цим фільтром записів немає" : "Книга порожня"}</strong>${
+        mine.length ? "Оберіть інший фільтр." : "Натисніть «Видати у тимчасове використання», щоб зробити перший запис."}</div></div>`;
+
+  $("#jbody").querySelectorAll("[data-tb]").forEach(b=>b.onclick=()=>tempBackModal(b.dataset.tb));
+  $("#jbody").querySelectorAll("[data-te]").forEach(b=>b.onclick=()=>tempModal(b.dataset.te));
+  $("#jbody").querySelectorAll("[data-td]").forEach(b=>b.onclick=()=>{
+    const r = tempAll().find(x=>x.id===b.dataset.td);
+    modal("Вилучення запису", `<p style="margin:0">Вилучити запис ${esc(r.no)} — «${esc(r.item)}»? Дію буде записано в журнал операцій.</p>`,
+      [{t:"Скасувати", f:close},{t:"Вилучити", cls:"danger", f:()=>{
+        S.temp = S.temp.filter(x=>x.id!==r.id);
+        log("Журнал", `Вилучено запис книги видачі МЦ ${r.no} — «${r.item}»`);
+        close(); toast("Запис вилучено"); render();
+      }}]);
+  });
+}
+
+function tempModal(id){
+  const r = id ? tempAll().find(x=>x.id===id) : null;
+  const assets = assetsAt(ME.loc);
+  modal(r ? `Зміна запису ${r.no}` : "Видача МЦ у тимчасове використання", `
+    ${!r && assets.length ? `<div class="field" style="margin-bottom:12px"><label>Обрати з майна підрозділу</label>
+      <select id="t-pick"><option value="">— вписати вручну —</option>
+        ${assets.map(a=>`<option value="${a.id}">${esc(a.name)}${a.nomen?" · "+esc(a.nomen):""} — ${qty(a.qty)} ${esc(a.unit)}</option>`).join("")}</select></div>`:""}
+    <div class="grid g2">
+      <div class="field" style="grid-column:1/-1"><label>Найменування матеріальних цінностей</label>
+        <input type="text" id="t-item" value="${r?esc(r.item):""}" placeholder="Ноші санітарні складані"></div>
+      <div class="field"><label>Інвентарний номер</label>
+        <input type="text" id="t-inv" value="${r?esc(r.inv||""):""}"></div>
+      <div class="field"><label>Кількість</label>
+        <input type="number" id="t-qty" step="any" min="0" value="${r?r.qty:1}"></div>
+      <div class="field"><label>Одиниця виміру</label>
+        <input type="text" id="t-unit" value="${r?esc(r.unit||"шт"):"шт"}"></div>
+      <div class="field"><label>Дата видачі</label>
+        <input type="date" id="t-out" value="${r?esc(r.out):ymd(today())}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Кому видано — прізвище та ініціали</label>
+        <input type="text" id="t-to" value="${r?esc(r.to):""}" placeholder="Шевченко І. М."></div>
+      <div class="field"><label>Звання</label>
+        <input type="text" id="t-rank" list="t-ranks" value="${r?esc(r.toRank||""):""}">
+        <datalist id="t-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
+      <div class="field"><label>Підрозділ</label>
+        <input type="text" id="t-unit2" value="${r?esc(r.toUnit||""):""}" placeholder="1 рота, 2 взвод"></div>
+      <div class="field"><label>Повернути до</label>
+        <input type="date" id="t-due" value="${r?esc(r.due||""):""}"></div>
+      <div class="field"><label>Підстава</label>
+        <input type="text" id="t-note" value="${r?esc(r.note||""):""}" placeholder="Розпорядження, наказ, мета використання"></div>
+    </div>
+    <p class="sub2" style="margin-top:10px">Запис ведеться від імені підрозділу «${LOCS[ME.loc].name}». Видача фіксується в журналі операцій.</p>`,
+    [{t:"Скасувати", f:close},{t:r?"Зберегти":"Записати видачу", cls:"primary", f:save2}]);
+
+  const pick = document.getElementById("t-pick");
+  if(pick) pick.onchange = ()=>{
+    const a = assets.find(x=>x.id===pick.value);
+    if(!a) return;
+    document.getElementById("t-item").value = a.name;
+    document.getElementById("t-inv").value = a.nomen || "";
+    document.getElementById("t-unit").value = a.unit || "шт";
+  };
+
+  function save2(){
+    const el = i => document.getElementById(i);
+    const item2 = el("t-item").value.trim(), to = el("t-to").value.trim();
+    const q = parseFloat(el("t-qty").value) || 0;
+    if(!item2) return toast("Вкажіть найменування матеріальних цінностей", true);
+    if(!to) return toast("Вкажіть, кому видано", true);
+    if(q <= 0) return toast("Кількість має бути більшою за нуль", true);
+    const data = {
+      item:item2, inv:el("t-inv").value.trim(), qty:q, unit:el("t-unit").value.trim() || "шт",
+      out:el("t-out").value || ymd(today()), to, toRank:el("t-rank").value.trim(),
+      toUnit:el("t-unit2").value.trim(), due:el("t-due").value, note:el("t-note").value.trim()
+    };
+    if(r){
+      Object.assign(r, data);
+      log("Журнал", `Змінено запис книги видачі МЦ ${r.no} — «${data.item}», ${data.to}`);
+      toast("Зміни збережено");
+    }else{
+      const no = "ТВ-" + String((S.temp||[]).length + 1).padStart(4, "0");
+      (S.temp = S.temp || []).push(Object.assign({id:uid("tv"), no, loc:ME.loc, by:ME.name, back:"", backBy:""}, data));
+      log("Журнал", `Видано у тимчасове використання ${no}: «${data.item}» — ${qty(q)} ${data.unit}, отримувач ${to}`
+        + (data.due ? `, повернути до ${dstr(data.due)}` : ""));
+      toast("Запис " + no + " внесено");
+    }
+    close(); render();
+  }
+}
+
+function tempBackModal(id){
+  const r = tempAll().find(x=>x.id===id);
+  modal(`Повернення МЦ — ${esc(r.no)}`, `
+    <p class="sub2" style="margin-top:0">«${esc(r.item)}» — ${qty(r.qty)} ${esc(r.unit||"шт")}, видано ${dstr(r.out)} отримувачу ${esc(r.to)}.</p>
+    <div class="grid g2">
+      <div class="field"><label>Дата повернення</label>
+        <input type="date" id="b-date" value="${ymd(today())}"></div>
+      <div class="field"><label>Прийняв</label>
+        <input type="text" id="b-by" value="${esc(ME.name)}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Стан майна, примітка</label>
+        <input type="text" id="b-note" placeholder="Наприклад: повернуто в справному стані"></div>
+    </div>`,
+    [{t:"Скасувати", f:close},{t:"Записати повернення", cls:"primary", f:()=>{
+      r.back = document.getElementById("b-date").value || ymd(today());
+      r.backBy = document.getElementById("b-by").value.trim() || ME.name;
+      const n = document.getElementById("b-note").value.trim();
+      if(n) r.note = (r.note ? r.note + ". " : "") + n;
+      log("Журнал", `Повернено за записом ${r.no}: «${r.item}» — ${qty(r.qty)} ${r.unit||"шт"}, від ${r.to}${n ? ". " + n : ""}`);
+      close(); toast("Повернення записано"); render();
+    }}]);
+}
+
+function exportTemp(){
+  const mine = ME.admin ? tempAll() : tempAll().filter(r => r.loc === ME.loc);
+  const aoa = [["№ запису","Найменування МЦ","Інвентарний номер","Кількість","Одиниця",
+    "Кому видано","Звання","Підрозділ","Дата видачі","Повернути до","Видав","Підрозділ, що видав",
+    "Дата повернення","Прийняв","Стан","Підстава, примітка"]];
+  mine.slice().sort((a,b)=>a.out.localeCompare(b.out)).forEach(r=>aoa.push([
+    r.no, r.item, r.inv||"", r.qty, r.unit||"шт", r.to, r.toRank||"", r.toUnit||"",
+    dstr(r.out), r.due?dstr(r.due):"", r.by, LOCS[r.loc]?LOCS[r.loc].name:"",
+    r.back?dstr(r.back):"", r.backBy||"", tempState(r).label, r.note||""
+  ]));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Видача МЦ");
+  XLSX.writeFile(wb, "kniga-vydachi-mc-" + ymd(today()) + ".xlsx");
+  log("Система", "Вивантажено книгу видачі МЦ у тимчасове використання");
+  toast("Файл сформовано");
+}
+
 /* =========== ВКЛАДКА: ТЕРМІНИ ВИКОНАННЯ =========== */
 const WD = ["Понеділок","Вівторок","Середа","Четвер","П'ятниця","Субота","Неділя"];
 const WD2 = ["Пн","Вт","Ср","Чт","Пт","Сб","Нд"];
@@ -4107,7 +4306,7 @@ function viewHist(){
   });
 
   const types = ["all", ...new Set(S.log.map(l=>l.type))];
-  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Майно":"acc","Строки":"ok","Доступ":"","Система":""};
+  const TCOL = {"Надходження":"ok","Видача":"acc","Заявка":"","Відмова":"crit","Списання":"warn","Рецепт":"","Виправлення":"warn","Майно":"acc","Журнал":"acc","Строки":"ok","Доступ":"","Система":""};
 
   $("#view").innerHTML = `<div class="row" style="margin-bottom:14px">
       <div class="field" style="width:220px"><label>Тип операції</label>
