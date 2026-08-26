@@ -213,6 +213,7 @@ textarea{resize:vertical;min-height:60px}
 .x{margin-left:auto;background:none;border:0;font-size:20px;line-height:1;cursor:pointer;color:var(--muted);padding:2px 6px}
 .x:hover{color:var(--crit)}
 
+#scan-root .scrim{z-index:150}
 #toast{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;flex-direction:column;gap:8px}
 .toast{background:var(--rail);color:#EAF2EC;padding:11px 15px;border-radius:var(--radius);font-size:13px;box-shadow:0 12px 30px -12px rgba(0,0,0,.5);max-width:340px;animation:in .18s ease-out}
 .toast.bad{background:var(--crit)}
@@ -413,6 +414,7 @@ textarea{resize:vertical;min-height:60px}
   </main>
 </div>
 <div id="modal-root"></div>
+<div id="scan-root"></div>
 <div id="toast"></div>
 
 
@@ -898,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 18.08.2026";
+const BUILD = "збірка 26.08.2026";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -3264,6 +3266,23 @@ function statusTag(r){
   return `<span class="tag ${t[0]}"><span class="dot"></span>${t[1]}</span>`;
 }
 
+/* верхній шар: відкривається поверх наявного вікна, не руйнуючи його */
+function layer(title, body, btns){
+  const root = document.getElementById("scan-root");
+  root.innerHTML = `<div class="scrim"><div class="modal" role="dialog" aria-modal="true">
+    <header><h3>${title}</h3><button class="x" aria-label="Закрити">×</button></header>
+    <div class="body">${body}</div>
+    <footer>${(btns||[]).map((b,i)=>`<button class="btn ${b.cls||""}" data-lk="${i}">${b.t}</button>`).join("")}</footer>
+  </div></div>`;
+  const shut = ()=>{ root.innerHTML = ""; document.removeEventListener("keydown", esc2); };
+  function esc2(e){ if(e.key === "Escape"){ const b = (btns||[])[0]; if(b && b.f) b.f(); else shut(); } }
+  root.querySelector(".x").onclick = ()=>{ const b = (btns||[])[0]; if(b && b.f) b.f(); else shut(); };
+  (btns||[]).forEach((b,i)=>{ root.querySelector(`[data-lk="${i}"]`).onclick = b.f; });
+  document.addEventListener("keydown", esc2);
+  return shut;
+}
+const layerClose = ()=>{ document.getElementById("scan-root").innerHTML = ""; };
+
 /* ---------- сканування штрихкодів камерою ----------
    Спершу пробуємо вбудований у браузер BarcodeDetector (Chrome на Android).
    Де його немає (Safari, iPhone) — підвантажуємо локальну бібліотеку. */
@@ -3311,7 +3330,7 @@ function loadScanner(){
 /* Відкриває камеру. onCode отримує сирий рядок коду. */
 function scanModal(title, onCode){
   let stop = null, done = false;
-  modal(title || "Сканування штрихкоду", `
+  layer(title || "Сканування штрихкоду", `
     <div id="sc-box" style="background:#000;border-radius:var(--radius);overflow:hidden;min-height:210px;
       display:flex;align-items:center;justify-content:center">
       <video id="sc-video" playsinline muted style="width:100%;max-height:56vh;display:block"></video>
@@ -3321,13 +3340,13 @@ function scanModal(title, onCode){
     <div class="field" style="margin-top:12px"><label>Або введіть код вручну</label>
       <div class="row"><input type="text" id="sc-man" placeholder="цифри під штрихкодом" style="flex:1">
         <button class="btn" id="sc-ok">Застосувати</button></div></div>`,
-    [{t:"Закрити", f:()=>{ shut(); close(); }}]);
+    [{t:"Закрити", f:()=>{ shut(); layerClose(); }}]);
 
   const msg = t => { const m = document.getElementById("sc-msg"); if(m) m.textContent = t; };
   const hit = raw => {
     if(done) return;
     done = true;
-    shut(); close();
+    shut(); layerClose();
     onCode(String(raw).trim());
   };
   document.getElementById("sc-ok").onclick = ()=>{
@@ -3391,21 +3410,21 @@ function scanForItem(onPick, opts){
     if(it) return onPick(it, gs1, raw);
     const rows = (opts && opts.rows) ? opts.rows : S.items.map(i => ({itemId:i.id, item:i, qty:0}));
     if(!rows.length) return toast("Каталог порожній — спершу оприбуткуйте медикаменти", true);
-    modal("Новий штрихкод", `
+    layer("Новий штрихкод", `
       <p style="margin-top:0">Код <span class="mono" style="font-weight:600">${esc(key)}</span> ще не прив'язаний.
         Оберіть препарат — далі система впізнаватиме його автоматично.</p>
       ${gs1 ? `<p class="sub2">Розпізнано маркування GS1${gs1.lot ? ", серія " + esc(gs1.lot) : ""}${gs1.expiry ? ", придатний до " + dstr(gs1.expiry) : ""}.</p>` : ""}
       <div class="field" style="margin-top:10px"><label>Пошук <span class="eyebrow" id="bc-find-cnt" style="margin-left:6px"></span></label>
         <input type="text" id="bc-find" placeholder="назва або номенклатурний номер" style="margin-bottom:6px">
         <select id="bc-pick"></select></div>`,
-      [{t:"Скасувати", f:close},{t:"Прив'язати", cls:"primary", f:()=>{
+      [{t:"Скасувати", f:layerClose},{t:"Прив'язати", cls:"primary", f:()=>{
         const id = document.getElementById("bc-pick").value;
         const chosen = S.items.find(x => x.id === id);
         if(!chosen) return toast("Оберіть препарат", true);
         S.codes = S.codes || {};
         S.codes[key] = id;
         log("Виправлення", `Штрихкод ${key} прив'язано до «${chosen.name}»`);
-        close(); toast("Код запам'ятовано"); onPick(chosen, gs1, raw);
+        layerClose(); toast("Код запам'ятовано"); onPick(chosen, gs1, raw);
       }}]);
     attachPicker("bc-find", "bc-pick", rows);
   });
@@ -4141,6 +4160,12 @@ function tempModal(id){
     id: "i:" + l + ":" + x.itemId, name: x.item.name, nomen: x.item.nomen || "", unit: x.item.unit,
     have: x.qty, where: LOCS[l].name, kind: "Залишок " + LOCS[l].short
   })));
+  /* якщо в підрозділі немає ні майна, ні залишків — пропонуємо весь каталог */
+  const seen = new Set(src.map(x => x.name.toLowerCase()));
+  S.items.forEach(i => { if(!seen.has(i.name.toLowerCase())) src.push({
+    id: "c:" + i.id, name: i.name, nomen: i.nomen || "", unit: i.unit,
+    have: STOCK.reduce((a,l)=>a+avail(l,i.id), 0), where: "по частині", kind: "Каталог"
+  }); });
   src.sort((a, b) => a.kind.localeCompare(b.kind, "uk") || a.name.localeCompare(b.name, "uk"));
   modal(r ? `Зміна запису ${r.no}` : "Видача МЦ у тимчасове використання", `
     ${!r && src.length ? `<div class="field" style="margin-bottom:12px">
