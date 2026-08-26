@@ -1183,6 +1183,19 @@ function findItem(name, nomen, unit){
 const item = id => S.items.find(i=>i.id===id) || {name:"— видалено —", nomen:"", unit:""};
 const atLoc = loc => S.batches.filter(b => b.loc===loc && b.qty > 0.0001);
 function avail(loc, itemId){ return atLoc(loc).filter(b=>b.itemId===itemId).reduce((s,b)=>s+b.qty,0); }
+/* Ціни партій. Якщо в позиції кілька цін — показуємо кожну з кількістю,
+   а не середню: у накладній той самий препарат може прийти за різною ціною. */
+function priceCell(r){
+  const m = new Map();
+  r.batches.forEach(b => {
+    const k = Math.round((b.price||0)*100)/100;
+    m.set(k, (m.get(k)||0) + b.qty);
+  });
+  const list = [...m.entries()].sort((a,b)=>b[0]-a[0]);
+  if(list.length <= 1) return money(list.length ? list[0][0] : 0);
+  return list.map(([p,q]) => `<div>${money(p)} <span class="sub2">×${qty(q)}</span></div>`).join("");
+}
+
 function stockRows(loc){
   const m = new Map();
   atLoc(loc).forEach(b=>{
@@ -1892,12 +1905,12 @@ function viewApteka(){
       <span class="spacer"></span><span class="eyebrow">${rows.length} позицій · ${money(total)} грн</span></header>
       ${rows.length? `<div class="tw"><table><thead><tr>
         <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th><th class="num">Ціна, грн</th><th class="num">Сума, грн</th><th>Найближчий термін</th><th>Партії</th></tr></thead><tbody>
-        ${rows.map(r=>{const s=shelf(r.nearest); const price=r.qty?r.sum/r.qty:0; return `<tr>
+        ${rows.map(r=>{const s=shelf(r.nearest); return `<tr>
           <td class="name">${esc(r.item.name)}</td>
           <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
           <td>${esc(r.item.unit)}</td>
           <td class="num" style="font-weight:600">${qty(r.qty)}</td>
-          <td class="num">${money(price)}</td>
+          <td class="num">${priceCell(r)}</td>
           <td class="num">${money(r.sum)}</td>
           <td><span class="tag ${s.cls}"><span class="dot"></span>${dstr(r.nearest)}</span></td>
           <td><button class="btn sm" data-b="${r.itemId}">${r.batches.length} парт.</button></td></tr>`}).join("")}
@@ -2505,7 +2518,8 @@ function viewUnits(){
           <td>${esc(r.item.unit)}</td>
           <td class="num" style="font-weight:600">${qty(r.qty)}</td>
           <td><div style="display:flex;flex-wrap:wrap;gap:5px">
-            ${r.batches.map(b=>{const sh=shelf(b.expiry);return `<span class="tag ${sh.cls}" title="${esc(sh.label)}"><span class="dot"></span>${qty(b.qty)} до ${dstr(b.expiry)}</span>`}).join("")}
+            ${r.batches.map(b=>{const sh=shelf(b.expiry);
+              return `<span class="tag ${sh.cls}" title="${esc(sh.label)} · ${money(b.price)} грн за ${esc(r.item.unit)}"><span class="dot"></span>${qty(b.qty)} до ${dstr(b.expiry)} · ${money(b.price)}</span>`}).join("")}
           </div></td>
           <td class="num">${money(r.sum)}</td>
           ${canEdit?`<td style="text-align:right"><button class="btn sm" data-off="${r.itemId}">Списати</button></td>`:""}
