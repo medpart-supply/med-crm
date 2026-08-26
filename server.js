@@ -275,6 +275,21 @@ function sendDict(name) {
 app.get("/mkh4.json", gate, sendDict("mkh4.json"));
 app.get("/atc5.json", gate, sendDict("atc5.json"));
 
+// бібліотека розпізнавання штрихкодів (html5-qrcode, Apache 2.0) — локальна копія,
+// потрібна там, де браузер не має вбудованого BarcodeDetector (Safari, iOS)
+app.get("/scanner.js", gate, (req, res) => {
+  const gz = path.join(__dirname, "public", "scanner.js.gz");
+  res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+  res.setHeader("Vary", "Accept-Encoding");
+  res.type("application/javascript");
+  if (!fs.existsSync(gz)) return res.sendFile(path.join(__dirname, "public", "scanner.js"));
+  if (String(req.headers["accept-encoding"] || "").toLowerCase().includes("gzip")) {
+    res.setHeader("Content-Encoding", "gzip");
+    return res.sendFile(gz);
+  }
+  fs.createReadStream(gz).pipe(zlib.createGunzip()).pipe(res);
+});
+
 app.get("/healthz", (req, res) => res.type("text").send("ok"));
 
 // сторінки
