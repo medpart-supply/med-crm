@@ -927,7 +927,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0};
 }
 async function load(){
@@ -947,6 +947,7 @@ async function load(){
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
+  if(!S.codes) S.codes = {};
   ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
@@ -2009,6 +2010,9 @@ function innModal(itemId){
         <input type="text" id="i-inn" value="${esc(it.inn||"")}" placeholder="${esc(guessINN(it.name))}"></div>
       <div class="field"><label>Код ATC</label>
         <input type="text" id="i-atc" value="${esc(it.atc||"")}" placeholder="напр. N02BE01"></div>
+      <div class="field" style="grid-column:1/-1"><label>Штрихкоди упаковок</label>
+        <div class="row" style="gap:6px"><input type="text" id="i-bar" value="${esc(Object.keys(S.codes||{}).filter(k=>S.codes[k]===itemId).join(", "))}" placeholder="сканується автоматично" style="flex:1">
+          <button type="button" class="btn" id="i-scan">Сканувати</button></div></div>
     </div>
     <div id="i-path" style="margin-top:10px">${atcHTML(it.atc)}</div>
     <p class="sub2" style="margin-top:10px">Аналогами вважаються позиції з тим самим кодом ATC або тією самою діючою речовиною. Дозування та форму випуску це не враховує.
@@ -2021,10 +2025,24 @@ function innModal(itemId){
       const ch = [];
       if((it.inn||"") !== v) ch.push(`діюча речовина: «${it.inn||"не вказано"}» → «${v||"не вказано"}»`);
       if((it.atc||"") !== a) ch.push(`код ATC: «${it.atc||"не вказано"}» → «${a||"не вказано"}»`);
+      const bars = document.getElementById("i-bar").value.split(",").map(x=>x.trim().replace(/^0+/,"")).filter(Boolean);
+      S.codes = S.codes || {};
+      Object.keys(S.codes).forEach(k => { if(S.codes[k] === itemId && !bars.includes(k)) delete S.codes[k]; });
+      const added = bars.filter(k => S.codes[k] !== itemId);
+      bars.forEach(k => S.codes[k] = itemId);
+      if(added.length) ch.push(`штрихкоди: ${added.join(", ")}`);
       if(!ch.length){ close(); return; }
       log("Виправлення", `Класифікація «${it.name}»: ${ch.join("; ")}`);
       it.inn = v; it.atc = a; close(); toast("Збережено"); render();
     }}]);
+  document.getElementById("i-scan").onclick = ()=>scanModal("Штрихкод — " + it.name, raw=>{
+    const key = barKey(raw);
+    const cur = document.getElementById("i-bar");
+    const list = cur.value.split(",").map(x=>x.trim()).filter(Boolean);
+    if(list.includes(key)) return toast("Цей код уже прив'язаний");
+    list.push(key); cur.value = list.join(", ");
+    toast("Код " + key + " додано, натисніть «Зберегти»");
+  });
   const ia = document.getElementById("i-atc");
   ia.oninput = ()=>{ document.getElementById("i-path").innerHTML = atcHTML(ia.value); };
 }
@@ -2248,7 +2266,9 @@ function manualModal(){
   modal("Оприбуткувати вручну", `
     ${rows.length ? `<div class="field" style="margin-bottom:14px">
       <label>Препарат <span class="eyebrow" id="m-cnt" style="margin-left:6px"></span></label>
-      <input type="text" id="m-find" placeholder="пошук за назвою або номенклатурним номером" style="margin-bottom:6px">
+      <div class="row" style="gap:6px;margin-bottom:6px">
+        <input type="text" id="m-find" placeholder="пошук за назвою або номенклатурним номером" style="flex:1">
+        <button type="button" class="btn" id="m-scan">Сканувати</button></div>
       <select id="m-pick"></select>
       <div class="sub2" id="m-hint" style="margin-top:6px"></div>
       <div id="m-alt"></div></div>` : ""}
@@ -2337,6 +2357,13 @@ function manualModal(){
       if(wasAuto || !el("m-atc").value.trim()){ el("m-atc").value = ""; }
       sug();
     };
+    el("m-scan").onclick = ()=>scanForItem((it, gs1)=>{
+      el("m-find").value = ""; drawPick();
+      el("m-pick").value = it.id; fill();
+      if(gs1 && gs1.expiry) el("m-exp").value = gs1.expiry;
+      if(gs1 && gs1.lot) el("m-src").value = (el("m-src").value.trim() ? el("m-src").value.trim() + ", " : "") + "серія " + gs1.lot;
+      toast(gs1 && gs1.expiry ? "Розпізнано: " + it.name + ", придатний до " + dstr(gs1.expiry) : "Обрано: " + it.name);
+    });
     el("m-find").oninput = drawPick;
     el("m-pick").onchange = fill;
     drawPick();
@@ -3237,8 +3264,176 @@ function statusTag(r){
   return `<span class="tag ${t[0]}"><span class="dot"></span>${t[1]}</span>`;
 }
 
+/* ---------- сканування штрихкодів камерою ----------
+   Спершу пробуємо вбудований у браузер BarcodeDetector (Chrome на Android).
+   Де його немає (Safari, iPhone) — підвантажуємо локальну бібліотеку. */
+const SCAN_FMT = ["ean_13","ean_8","code_128","code_39","itf","upc_a","upc_e","data_matrix","qr_code"];
+
+/* розбір GS1 DataMatrix: (01) код товару, (17) термін придатності, (10) серія, (21) номер */
+function parseGS1(raw){
+  const t = String(raw||"").replace(/[\u001d\u001e]/g, "|");
+  if(!/^(\||)?01\d{14}/.test(t.replace(/^\|/,""))) return null;
+  const s2 = t.replace(/^\|/,"");
+  const out = {};
+  let i = 0;
+  const FIX = {"01":14, "17":6, "11":6, "15":6};
+  while(i < s2.length){
+    const ai = s2.slice(i, i+2); i += 2;
+    if(FIX[ai]){
+      const v = s2.slice(i, i + FIX[ai]); i += FIX[ai];
+      if(ai === "01") out.gtin = v;
+      if(ai === "17") out.expiry = "20" + v.slice(0,2) + "-" + v.slice(2,4) + "-" + (v.slice(4,6) === "00" ? "01" : v.slice(4,6));
+    }else if(ai === "10" || ai === "21"){
+      let j = s2.indexOf("|", i);
+      if(j < 0) j = s2.length;
+      const v = s2.slice(i, j); i = j + 1;
+      if(ai === "10") out.lot = v;
+      if(ai === "21") out.sn = v;
+    }else break;
+  }
+  return out.gtin ? out : null;
+}
+const barKey = raw => { const g = parseGS1(raw); return g ? g.gtin.replace(/^0+/, "") : String(raw||"").trim().replace(/^0+/, ""); };
+const codeItem = raw => { const it = S.items.find(x => x.id === (S.codes||{})[barKey(raw)]); return it || null; };
+
+let scanLib = null;
+function loadScanner(){
+  if(scanLib) return Promise.resolve(scanLib);
+  return new Promise((res, rej) => {
+    const el = document.createElement("script");
+    el.src = "scanner.js";
+    el.onload = () => { scanLib = window.Html5Qrcode || null; scanLib ? res(scanLib) : rej(new Error("бібліотека не завантажилась")); };
+    el.onerror = () => rej(new Error("файл scanner.js недоступний"));
+    document.head.appendChild(el);
+  });
+}
+
+/* Відкриває камеру. onCode отримує сирий рядок коду. */
+function scanModal(title, onCode){
+  let stop = null, done = false;
+  modal(title || "Сканування штрихкоду", `
+    <div id="sc-box" style="background:#000;border-radius:var(--radius);overflow:hidden;min-height:210px;
+      display:flex;align-items:center;justify-content:center">
+      <video id="sc-video" playsinline muted style="width:100%;max-height:56vh;display:block"></video>
+      <div id="sc-lib" style="width:100%"></div>
+    </div>
+    <p class="sub2" id="sc-msg" style="margin:10px 0 0">Наведіть камеру на штрихкод упаковки.</p>
+    <div class="field" style="margin-top:12px"><label>Або введіть код вручну</label>
+      <div class="row"><input type="text" id="sc-man" placeholder="цифри під штрихкодом" style="flex:1">
+        <button class="btn" id="sc-ok">Застосувати</button></div></div>`,
+    [{t:"Закрити", f:()=>{ shut(); close(); }}]);
+
+  const msg = t => { const m = document.getElementById("sc-msg"); if(m) m.textContent = t; };
+  const hit = raw => {
+    if(done) return;
+    done = true;
+    shut(); close();
+    onCode(String(raw).trim());
+  };
+  document.getElementById("sc-ok").onclick = ()=>{
+    const v = document.getElementById("sc-man").value.trim();
+    if(!v) return toast("Введіть код", true);
+    hit(v);
+  };
+  document.getElementById("sc-man").onkeydown = e => { if(e.key === "Enter") document.getElementById("sc-ok").click(); };
+
+  function shut(){
+    try{ if(stop) stop(); }catch(e){}
+    stop = null;
+  }
+
+  (async ()=>{
+    /* 1. вбудований детектор */
+    if(window.BarcodeDetector){
+      try{
+        const sup = await window.BarcodeDetector.getSupportedFormats();
+        const det = new window.BarcodeDetector({formats: SCAN_FMT.filter(f => sup.includes(f))});
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}});
+        const v = document.getElementById("sc-video");
+        if(!v){ stream.getTracks().forEach(t2=>t2.stop()); return; }
+        document.getElementById("sc-lib").style.display = "none";
+        v.srcObject = stream; await v.play();
+        msg("Камера працює. Наведіть на штрихкод.");
+        let timer = setInterval(async ()=>{
+          if(done) return;
+          try{
+            const codes = await det.detect(v);
+            if(codes && codes.length) hit(codes[0].rawValue);
+          }catch(e){}
+        }, 400);
+        stop = ()=>{ clearInterval(timer); stream.getTracks().forEach(t2=>t2.stop()); };
+        return;
+      }catch(e){
+        if(String(e && e.name) === "NotAllowedError"){ msg("Доступ до камери заборонено. Дозвольте його в налаштуваннях браузера або введіть код вручну."); return; }
+      }
+    }
+    /* 2. запасний варіант для Safari та iPhone */
+    msg("Готую сканер…");
+    try{
+      const Lib = await loadScanner();
+      const v = document.getElementById("sc-video");
+      if(v) v.style.display = "none";
+      const inst = new Lib("sc-lib");
+      await inst.start({facingMode:"environment"}, {fps:10, qrbox:{width:260, height:160}},
+        txt => hit(txt), ()=>{});
+      msg("Камера працює. Наведіть на штрихкод.");
+      stop = ()=>{ try{ inst.stop().then(()=>inst.clear()); }catch(e){} };
+    }catch(e){
+      msg("Камера недоступна: " + (e && e.message ? e.message : "браузер не підтримує сканування") + ". Введіть код вручну.");
+    }
+  })();
+}
+
+/* Сканування з прив'язкою до каталогу: якщо код невідомий — пропонуємо запам'ятати. */
+function scanForItem(onPick, opts){
+  scanModal("Сканування штрихкоду", raw => {
+    const gs1 = parseGS1(raw), key = barKey(raw), it = codeItem(raw);
+    if(it) return onPick(it, gs1, raw);
+    const rows = (opts && opts.rows) ? opts.rows : S.items.map(i => ({itemId:i.id, item:i, qty:0}));
+    if(!rows.length) return toast("Каталог порожній — спершу оприбуткуйте медикаменти", true);
+    modal("Новий штрихкод", `
+      <p style="margin-top:0">Код <span class="mono" style="font-weight:600">${esc(key)}</span> ще не прив'язаний.
+        Оберіть препарат — далі система впізнаватиме його автоматично.</p>
+      ${gs1 ? `<p class="sub2">Розпізнано маркування GS1${gs1.lot ? ", серія " + esc(gs1.lot) : ""}${gs1.expiry ? ", придатний до " + dstr(gs1.expiry) : ""}.</p>` : ""}
+      <div class="field" style="margin-top:10px"><label>Пошук <span class="eyebrow" id="bc-find-cnt" style="margin-left:6px"></span></label>
+        <input type="text" id="bc-find" placeholder="назва або номенклатурний номер" style="margin-bottom:6px">
+        <select id="bc-pick"></select></div>`,
+      [{t:"Скасувати", f:close},{t:"Прив'язати", cls:"primary", f:()=>{
+        const id = document.getElementById("bc-pick").value;
+        const chosen = S.items.find(x => x.id === id);
+        if(!chosen) return toast("Оберіть препарат", true);
+        S.codes = S.codes || {};
+        S.codes[key] = id;
+        log("Виправлення", `Штрихкод ${key} прив'язано до «${chosen.name}»`);
+        close(); toast("Код запам'ятовано"); onPick(chosen, gs1, raw);
+      }}]);
+    attachPicker("bc-find", "bc-pick", rows);
+  });
+}
+
 /* ---------- швидкий пошук у переліку препаратів ---------- */
 function attachPicker(findId, selId, rows, onPick){
+  /* кнопка камери поруч із пошуком */
+  const inp0 = document.getElementById(findId);
+  if(inp0 && !inp0.dataset.scan && findId !== "bc-find"){
+    inp0.dataset.scan = "1";
+    const wrap = document.createElement("div");
+    wrap.className = "row"; wrap.style.gap = "6px";
+    inp0.parentNode.insertBefore(wrap, inp0);
+    inp0.style.flex = "1";
+    wrap.appendChild(inp0);
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn"; b.textContent = "Сканувати";
+    b.onclick = ()=>scanForItem((it)=>{
+      const sel = document.getElementById(selId);
+      const has = [...sel.options].some(o => o.value === it.id);
+      if(!has){ toast("«" + it.name + "» немає в цьому переліку", true); return; }
+      inp0.value = ""; inp0.dispatchEvent(new Event("input"));
+      sel.value = it.id; sel.dispatchEvent(new Event("change"));
+      toast("Обрано: " + it.name);
+    }, {rows});
+    wrap.appendChild(b);
+  }
   const inp = document.getElementById(findId), sel = document.getElementById(selId);
   const opts = rows.map(r => ({
     v: r.itemId,
@@ -3934,11 +4129,25 @@ function viewJour(){
 
 function tempModal(id){
   const r = id ? tempAll().find(x=>x.id===id) : null;
-  const assets = assetsAt(ME.loc);
+
+  /* що можна видати: майно підрозділів і позиції каталогу, які є на залишках */
+  const src = [];
+  const locs = ME.admin ? STOCK : [ME.loc, ...(ME.loc === "senior" ? ["post"] : [])];
+  locs.forEach(l => assetsAt(l).forEach(a => src.push({
+    id: "a:" + a.id, name: a.name, nomen: a.nomen || "", unit: a.unit || "шт",
+    have: a.qty, where: LOCS[l].name, kind: "Майно " + LOCS[l].short
+  })));
+  locs.forEach(l => stockRows(l).forEach(x => src.push({
+    id: "i:" + l + ":" + x.itemId, name: x.item.name, nomen: x.item.nomen || "", unit: x.item.unit,
+    have: x.qty, where: LOCS[l].name, kind: "Залишок " + LOCS[l].short
+  })));
+  src.sort((a, b) => a.kind.localeCompare(b.kind, "uk") || a.name.localeCompare(b.name, "uk"));
   modal(r ? `Зміна запису ${r.no}` : "Видача МЦ у тимчасове використання", `
-    ${!r && assets.length ? `<div class="field" style="margin-bottom:12px"><label>Обрати з майна підрозділу</label>
-      <select id="t-pick"><option value="">— вписати вручну —</option>
-        ${assets.map(a=>`<option value="${a.id}">${esc(a.name)}${a.nomen?" · "+esc(a.nomen):""} — ${qty(a.qty)} ${esc(a.unit)}</option>`).join("")}</select></div>`:""}
+    ${!r && src.length ? `<div class="field" style="margin-bottom:12px">
+      <label>Обрати зі списку <span class="eyebrow" id="t-cnt" style="margin-left:6px"></span></label>
+      <input type="text" id="t-find" placeholder="пошук за назвою або номером" style="margin-bottom:6px">
+      <select id="t-pick" size="1"></select>
+      <div class="sub2" id="t-hint" style="margin-top:5px"></div></div>`:""}
     <div class="grid g2">
       <div class="field" style="grid-column:1/-1"><label>Найменування матеріальних цінностей</label>
         <input type="text" id="t-item" value="${r?esc(r.item):""}" placeholder="Ноші санітарні складані"></div>
@@ -3966,13 +4175,38 @@ function tempModal(id){
     [{t:"Скасувати", f:close},{t:r?"Зберегти":"Записати видачу", cls:"primary", f:save2}]);
 
   const pick = document.getElementById("t-pick");
-  if(pick) pick.onchange = ()=>{
-    const a = assets.find(x=>x.id===pick.value);
-    if(!a) return;
-    document.getElementById("t-item").value = a.name;
-    document.getElementById("t-inv").value = a.nomen || "";
-    document.getElementById("t-unit").value = a.unit || "шт";
-  };
+  if(pick){
+    const find = document.getElementById("t-find"), cnt = document.getElementById("t-cnt"),
+          hint = document.getElementById("t-hint");
+    const draw = ()=>{
+      const q = find.value.trim().toLowerCase();
+      const list = q ? src.filter(x => (x.name + " " + x.nomen).toLowerCase().indexOf(q) >= 0) : src;
+      const keep = pick.value;
+      let html = `<option value="">— вписати вручну —</option>`, group = "";
+      list.forEach(x => {
+        if(x.kind !== group){ if(group) html += `</optgroup>`; html += `<optgroup label="${esc(x.kind)}">`; group = x.kind; }
+        html += `<option value="${x.id}">${esc(x.name)}${x.nomen ? " · " + esc(x.nomen) : ""} — ${qty(x.have)} ${esc(x.unit)}</option>`;
+      });
+      if(group) html += `</optgroup>`;
+      pick.innerHTML = html;
+      if(list.some(x => x.id === keep)) pick.value = keep;
+      cnt.textContent = q ? (list.length ? "знайдено: " + list.length : "нічого не знайдено") : "усього: " + src.length;
+      fill();
+    };
+    const fill = ()=>{
+      const x = src.find(y => y.id === pick.value);
+      if(!x){ hint.textContent = "Позиції немає у списку — впишіть найменування вручну."; return; }
+      document.getElementById("t-item").value = x.name;
+      document.getElementById("t-inv").value = x.nomen;
+      document.getElementById("t-unit").value = x.unit;
+      const qEl = document.getElementById("t-qty");
+      if(parseFloat(qEl.value) > x.have) qEl.value = x.have;
+      hint.textContent = x.kind + " · " + x.where + ", наявно " + qty(x.have) + " " + x.unit;
+    };
+    find.oninput = draw;
+    pick.onchange = fill;
+    draw();
+  }
 
   function save2(){
     const el = i => document.getElementById(i);
