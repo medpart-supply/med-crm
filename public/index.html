@@ -905,7 +905,7 @@ const BUILD = "збірка 26.08.2026";
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
 let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine", jour:"temp", jourF:"out"};
-let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:""};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:""};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
@@ -3107,8 +3107,17 @@ function viewReq(){
     if(!flt.monthKind) flt.monthKind = isPharm ? "cito" : "plain";
     const now = today();
     if(!flt.month) flt.month = now.getFullYear() + "-" + pad2(now.getMonth()+1);
+    /* довільний період; якщо не заданий — увесь обраний місяць */
     const [yy, mm] = flt.month.split("-").map(Number);
-    const from = new Date(yy, mm-1, 1), to = new Date(yy, mm, 1);
+    if(!flt.from) flt.from = ymd(new Date(yy, mm-1, 1));
+    if(!flt.to)   flt.to   = ymd(new Date(yy, mm, 0));
+    const dayLocal = v => { const m2 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v||"")); 
+      return m2 ? new Date(+m2[1], +m2[2]-1, +m2[3]) : null; };
+    const from = dayLocal(flt.from) || new Date(yy, mm-1, 1);
+    const toIn = dayLocal(flt.to)   || new Date(yy, mm, 0);
+    const to = new Date(toIn.getFullYear(), toIn.getMonth(), toIn.getDate() + 1);   // кінцевий день включно
+    const days = Math.round((to - from) / 86400000);
+    const periodLabel = days === 1 ? dstr(from) : dstr(from) + " — " + dstr(toIn);
 
     /* аптека типово рахує рецепти Cito, старша медсестра — звичайні призначення */
     const kind = flt.monthKind;
@@ -3152,14 +3161,20 @@ function viewReq(){
       <div class="row" style="margin-bottom:14px">
         <div class="field" style="width:190px"><label>Місяць</label>
           <select id="m-sel">${months.map(([v,n])=>`<option value="${v}" ${flt.month===v?"selected":""}>${n}</option>`).join("")}</select></div>
+        <div class="field" style="width:150px"><label>Від</label>
+          <input type="date" id="m-from" value="${esc(flt.from)}"></div>
+        <div class="field" style="width:150px"><label>До</label>
+          <input type="date" id="m-to" value="${esc(flt.to)}"></div>
         <div class="field" style="width:230px"><label>Що обліковуємо</label>
           <select id="m-kind">
             <option value="plain" ${kind==="plain"?"selected":""}>Призначення (ПМС → СМС)</option>
             <option value="cito" ${kind==="cito"?"selected":""}>Рецепти Cito! (склад аптеки)</option>
             <option value="all" ${kind==="all"?"selected":""}>Усе разом</option>
           </select></div>
+        <button class="btn" id="m-week" style="height:37px">Тиждень</button>
         <button class="btn" id="m-exp" style="height:37px">Вивантажити в Excel</button>
       </div>
+      <p class="sub2" style="margin:-6px 0 12px">Період: <b>${esc(periodLabel)}</b> · ${days} ${days===1?"день":days<5?"дні":"днів"}. Вибір місяця задає весь місяць; далі межі можна звузити.</p>
 
       <div class="grid g4" style="margin-bottom:14px">
         <div class="stat acc"><div class="eyebrow">Усього ${esc(title)}</div><div class="v">${all.length}</div>
@@ -3181,7 +3196,7 @@ function viewReq(){
             ${top.map(x=>`<tr><td class="name">${esc(x.it.name)}<div class="sub2 mono">${esc(x.it.nomen||"—")}</div></td>
               <td class="num" style="font-weight:600">${qty(x.qty)} ${esc(x.it.unit)}</td>
               <td class="num">${x.times}</td></tr>`).join("")}
-          </tbody></table></div>` : `<div class="empty"><strong>За цей місяць видач не було</strong>Оберіть інший період.</div>`}
+          </tbody></table></div>` : `<div class="empty"><strong>За цей період видач не було</strong>Змініть межі періоду.</div>`}
         </div>
         <div>
           <div class="card" style="margin-bottom:14px"><header><h3>За діагнозами</h3></header>
@@ -3211,10 +3226,37 @@ function viewReq(){
             <td class="sub2">${esc(r.doctor)}</td>
             <td class="sub2">${r.lines.filter(l=>l.got>0).map(l=>esc(item(l.itemId).name)+" "+qty(l.got)).join("; ")||"—"}</td>
             <td>${statusTag(r)}</td></tr>`).join("")}
-        </tbody></table></div>` : `<div class="empty"><strong>За цей місяць записів немає</strong></div>`}
+        </tbody></table></div>` : `<div class="empty"><strong>За цей період записів немає</strong>Змініть межі або оберіть інший місяць.</div>`}
       </div>`;
 
-    document.getElementById("m-sel").onchange = e => { flt.month = e.target.value; render(); };
+    document.getElementById("m-sel").onchange = e => {
+      flt.month = e.target.value;
+      const [y2, m2] = flt.month.split("-").map(Number);
+      flt.from = ymd(new Date(y2, m2-1, 1));
+      flt.to   = ymd(new Date(y2, m2, 0));
+      render();
+    };
+    /* дата змінюється і календарем, і з клавіатури — слухаємо обидві події */
+    const onFrom = e => {
+      const v = e.target.value; if(!v) return;
+      flt.from = v; if(flt.to < flt.from) flt.to = flt.from;
+      render();
+    };
+    const onTo = e => {
+      const v = e.target.value; if(!v) return;
+      flt.to = v; if(flt.to < flt.from) flt.from = flt.to;
+      render();
+    };
+    document.getElementById("m-from").onchange = onFrom;
+    document.getElementById("m-from").oninput  = onFrom;
+    document.getElementById("m-to").onchange = onTo;
+    document.getElementById("m-to").oninput  = onTo;
+    document.getElementById("m-week").onclick = ()=>{
+      const d2 = new Date(now); d2.setDate(d2.getDate() - 6);
+      flt.from = ymd(d2); flt.to = ymd(now);
+      flt.month = now.getFullYear() + "-" + pad2(now.getMonth()+1);
+      render();
+    };
     document.getElementById("m-kind").onchange = e => { flt.monthKind = e.target.value; render(); };
     document.getElementById("m-exp").onclick = ()=>{
       const wb = XLSX.utils.book_new();
@@ -3235,8 +3277,8 @@ function viewReq(){
         [["Код МКХ","Діагноз","Звернень"]].concat(dxTop.map(x=>[x.code, x.name, x.n]))), "Діагнози");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
         [["Підрозділ","Звернень"]].concat(grpTop.map(x=>[x[0], x[1]]))), "Підрозділи");
-      XLSX.writeFile(wb, "oblik-" + flt.month + "-" + kind + ".xlsx");
-      log("Система", `Вивантажено облік ${title} за ${MON[mm-1]} ${yy}: ${all.length} записів`);
+      XLSX.writeFile(wb, "oblik-" + flt.from + "_" + flt.to + "-" + kind + ".xlsx");
+      log("Система", `Вивантажено облік ${title} за період ${periodLabel}: ${all.length} записів`);
       toast("Файл сформовано");
     };
   }
