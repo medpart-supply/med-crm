@@ -3579,7 +3579,7 @@ function newRxModal(cito){
     <div class="row" style="margin-bottom:12px">
       <div class="field" style="flex:1;min-width:250px"><label>Препарат (${cito ? "є на складі аптеки" : "є на посту або у старшої медсестри"})</label>
         <select id="rx-pick"></select></div>
-      <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="any" min="0" value="1"></div>
+      <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="0.1" min="0" value="0.1"></div>
       <button class="btn" id="rx-add">Додати до призначення</button>
     </div>
     <div id="rx-alt" style="margin:-6px 0 12px"></div>
@@ -3729,7 +3729,7 @@ function newRxModal(cito){
     if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===id);
     if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
-    $("#rx-q").value = 1;                       // наступна позиція починається з одиниці
+    $("#rx-q").value = 0.1;                     // наступна позиція починається з 0,1
     draw();
   };
   function submit(){
@@ -3842,7 +3842,7 @@ function reviewRxModal(id){
     <div class="row" style="margin-top:12px">
       <div class="field" style="flex:1;min-width:240px"><label>Додати препарат</label>
         <select id="rev-pick">${rows.map(x=>`<option value="${x.itemId}">${esc(x.item.name)} — ${qty(x.qty)} ${esc(x.item.unit)}</option>`).join("")}</select></div>
-      <div class="field" style="width:110px"><label>Кількість</label><input type="number" id="rev-q" step="any" min="0" value="1"></div>
+      <div class="field" style="width:110px"><label>Кількість</label><input type="number" id="rev-q" step="0.1" min="0" value="0.1"></div>
       <button class="btn" id="rev-add">Додати</button>
     </div>
     <div class="field" style="margin-top:12px"><label>Примітка старшої медсестри</label>
@@ -3879,7 +3879,7 @@ function reviewRxModal(id){
     if(q <= 0) return toast("Вкажіть кількість більшу за нуль", true);
     const ex = lines.find(l=>l.itemId===pid);
     if(ex) ex.want += q; else lines.push({itemId:pid, want:q});
-    document.getElementById("rev-q").value = 1;
+    document.getElementById("rev-q").value = 0.1;
     draw();
   };
 
