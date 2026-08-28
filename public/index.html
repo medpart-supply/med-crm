@@ -905,7 +905,7 @@ const BUILD = "збірка 26.08.2026";
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
 let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine", jour:"temp", jourF:"out"};
-let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:""};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all"};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
@@ -1253,7 +1253,20 @@ const RANKS = ["курсант","солдат","старший солдат","м
   "головний сержант","штаб-сержант","майстер-сержант","старший майстер-сержант","головний майстер-сержант",
   "молодший лейтенант","лейтенант","старший лейтенант","капітан","майор","підполковник","полковник",
   "працівник ЗСУ / НГУ"];
-const patientLine = r => [r.rank, r.group].filter(Boolean).join(" · ");
+/* Розподіл виписок за категоріями особового складу — три окремі журнали. */
+const CATS = [["off","Офіцери"],["cad","Курсанти"],["trn","Навчальна рота"]];
+const canSetCat = r => ME.admin || S.role === "senior" || r.docLoc === S.role;
+const CAT_NAME = c => (CATS.find(x=>x[0]===c)||[null,"Не вказано"])[1];
+const OFF_RANKS = ["лейтенант","капітан","майор","підполковник","полковник","генерал"];
+/* типова категорія за званням: офіцерські звання і курсант визначаються самі */
+function guessCat(rank){
+  const r = String(rank||"").toLowerCase();
+  if(!r) return "";
+  if(r.indexOf("курсант") >= 0) return "cad";
+  if(OFF_RANKS.some(x => r.indexOf(x) >= 0)) return "off";
+  return "";
+}
+const patientLine = r => [r.rank, r.group, r.cat ? CAT_NAME(r.cat) : ""].filter(Boolean).join(" · ");
 
 const RX_CHAIN   = ["post","senior"];                // призначення: пост → старша медсестра
 const CITO_CHAIN = ["apteka"];                       // Cito! — тільки склад аптеки
@@ -3121,11 +3134,20 @@ function viewReq(){
 
     /* аптека типово рахує рецепти Cito, старша медсестра — звичайні призначення */
     const kind = flt.monthKind;
+    const cat = flt.cat2 || "all";
     const all = (S.rx||[]).filter(r => {
       const d = r.closed || r.created;
       if(d < +from || d >= +to) return false;
+      if(cat === "none"){ if(r.cat) return false; }
+      else if(cat !== "all" && (r.cat || "") !== cat) return false;
       return kind === "all" ? true : (kind === "cito" ? !!r.cito : !r.cito);
     }).sort((a,b)=>(a.closed||a.created)-(b.closed||b.created));
+    /* скільки записів у кожному журналі за цей період і вид документа */
+    const inPeriod = (S.rx||[]).filter(r => {
+      const d = r.closed || r.created;
+      return d >= +from && d < +to && (kind === "all" ? true : (kind === "cito" ? !!r.cito : !r.cito));
+    });
+    const catCount = c => inPeriod.filter(r => (r.cat || "") === c).length;
 
     const issued = all.filter(r => r.status === "issued" || r.status === "partial");
     const drugs = new Map();
@@ -3172,10 +3194,16 @@ function viewReq(){
             <option value="all" ${kind==="all"?"selected":""}>Усе разом</option>
           </select></div>
         <button class="btn" id="m-week" style="height:37px">Тиждень</button>
+        ${(S.rx||[]).some(r=>!r.cat) ? `<button class="btn" id="m-bulk" style="height:37px">Рознести за журналами</button>`:""}
         <button class="btn" id="m-exp" style="height:37px">Вивантажити в Excel</button>
       </div>
       <p class="sub2" style="margin:-6px 0 12px">Період: <b>${esc(periodLabel)}</b> · ${days} ${days===1?"день":days<5?"дні":"днів"}. Вибір місяця задає весь місяць; далі межі можна звузити.</p>
 
+      <div class="row" style="margin-bottom:14px"><div class="seg">
+        <button data-mc="all" class="${cat==="all"?"on":""}">Усі (${inPeriod.length})</button>
+        ${CATS.map(c=>`<button data-mc="${c[0]}" class="${cat===c[0]?"on":""}">${c[1]} (${catCount(c[0])})</button>`).join("")}
+        ${inPeriod.filter(r=>!r.cat).length ? `<button data-mc="none" class="${cat==="none"?"on":""}">Без категорії (${inPeriod.filter(r=>!r.cat).length})</button>`:""}
+      </div></div>
       <div class="grid g4" style="margin-bottom:14px">
         <div class="stat acc"><div class="eyebrow">Усього ${esc(title)}</div><div class="v">${all.length}</div>
           <div class="n">виконано ${issued.length} · відхилено ${all.filter(r=>r.status==="rejected").length}</div></div>
@@ -3206,6 +3234,13 @@ function viewReq(){
                 <td class="sub2">${esc(x.name)}</td><td class="num">${x.n}</td></tr>`).join("")}
             </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
           </div>
+          <div class="card" style="margin-bottom:14px"><header><h3>За категоріями обліку</h3></header>
+            <div class="tw" style="max-height:200px"><table><thead><tr><th>Журнал</th>
+              <th class="num">Звернень</th></tr></thead><tbody>
+              ${CATS.map(c=>`<tr><td>${c[1]}</td><td class="num">${issued.filter(r=>r.cat===c[0]).length}</td></tr>`).join("")}
+              ${issued.filter(r=>!r.cat).length?`<tr><td class="sub2">без категорії</td><td class="num">${issued.filter(r=>!r.cat).length}</td></tr>`:""}
+            </tbody></table></div>
+          </div>
           <div class="card"><header><h3>За підрозділами</h3></header>
             ${grpTop.length? `<div class="tw" style="max-height:220px"><table><thead><tr><th>Підрозділ</th>
               <th class="num">Звернень</th></tr></thead><tbody>
@@ -3218,17 +3253,24 @@ function viewReq(){
       <div class="card" style="margin-top:14px"><header><h3>Перелік</h3><span class="spacer"></span>
           <span class="eyebrow">${all.length}</span></header>
         ${all.length? `<div class="tw"><table><thead><tr><th>№</th><th>Дата</th><th>Пацієнт</th><th>Діагноз</th>
-          <th>Призначив</th><th>Видано</th><th>Стан</th></tr></thead><tbody>
+          <th>Журнал</th><th>Призначив</th><th>Видано</th><th>Стан</th></tr></thead><tbody>
           ${all.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="mono sub2">${dstr(new Date(r.closed||r.created))}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
             <td class="mono sub2">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</td>
+            <td>${canSetCat(r)
+              ? `<button class="btn sm ${r.cat?"":"danger"}" data-setcat="${r.id}">${r.cat?esc(CAT_NAME(r.cat)):"вказати"}</button>`
+              : `<span class="sub2">${r.cat?esc(CAT_NAME(r.cat)):"—"}</span>`}</td>
             <td class="sub2">${esc(r.doctor)}</td>
             <td class="sub2">${r.lines.filter(l=>l.got>0).map(l=>esc(item(l.itemId).name)+" "+qty(l.got)).join("; ")||"—"}</td>
             <td>${statusTag(r)}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>За цей період записів немає</strong>Змініть межі або оберіть інший місяць.</div>`}
       </div>`;
 
+    document.querySelectorAll("[data-mc]").forEach(b=>b.onclick=()=>{ flt.cat2 = b.dataset.mc; render(); });
+    document.querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
+    const bulk = document.getElementById("m-bulk");
+    if(bulk) bulk.onclick = catBulkModal;
     document.getElementById("m-sel").onchange = e => {
       flt.month = e.target.value;
       const [y2, m2] = flt.month.split("-").map(Number);
@@ -3260,9 +3302,9 @@ function viewReq(){
     document.getElementById("m-kind").onchange = e => { flt.monthKind = e.target.value; render(); };
     document.getElementById("m-exp").onclick = ()=>{
       const wb = XLSX.utils.book_new();
-      const a1 = [["№","Дата","Пацієнт","Звання","Підрозділ пацієнта","Код МКХ","Діагноз","Призначив","Ким призначено (підрозділ)","Терміновий","Стан","Препарат","Видано","Одиниця","Звідки"]];
+      const a1 = [["№","Дата","Пацієнт","Звання","Категорія обліку","Підрозділ пацієнта","Код МКХ","Діагноз","Призначив","Ким призначено (підрозділ)","Терміновий","Стан","Препарат","Видано","Одиниця","Звідки"]];
       all.forEach(r => {
-        const base = [r.no, dstr(new Date(r.closed||r.created)), r.patient, r.rank||"", r.group||"",
+        const base = [r.no, dstr(new Date(r.closed||r.created)), r.patient, r.rank||"", r.cat?CAT_NAME(r.cat):"", r.group||"",
           r.dx?(r.dx.det||r.dx.sub||r.dx.code):"", r.dx?(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name)):"",
           r.doctor, LOCS[r.docLoc]?LOCS[r.docLoc].name:"", r.cito?"Cito!":"", statusTag(r).replace(/<[^>]+>/g,"")];
         if(!r.lines.length) a1.push(base.concat(["","","",""]));
@@ -3277,6 +3319,17 @@ function viewReq(){
         [["Код МКХ","Діагноз","Звернень"]].concat(dxTop.map(x=>[x.code, x.name, x.n]))), "Діагнози");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
         [["Підрозділ","Звернень"]].concat(grpTop.map(x=>[x[0], x[1]]))), "Підрозділи");
+      /* окремий аркуш на кожен журнал */
+      CATS.forEach(c=>{
+        const list = all.filter(r => r.cat === c[0]);
+        if(!list.length) return;
+        const a2 = [["№","Дата","Пацієнт","Звання","Підрозділ","Код МКХ","Діагноз","Препарат","Видано","Одиниця"]];
+        list.forEach(r => r.lines.forEach(l => a2.push([r.no, dstr(new Date(r.closed||r.created)), r.patient,
+          r.rank||"", r.group||"", r.dx?(r.dx.det||r.dx.sub||r.dx.code):"",
+          r.dx?(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name)):"",
+          item(l.itemId).name, l.got||0, item(l.itemId).unit])));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a2), c[1].slice(0,28));
+      });
       XLSX.writeFile(wb, "oblik-" + flt.from + "_" + flt.to + "-" + kind + ".xlsx");
       log("Система", `Вивантажено облік ${title} за період ${periodLabel}: ${all.length} записів`);
       toast("Файл сформовано");
@@ -3289,12 +3342,15 @@ function viewReq(){
       <div class="card" style="margin-bottom:14px"><header><h3>Історія рецептів</h3><span class="spacer"></span>
         <span class="eyebrow">${doneRx.length}</span></header>
         ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Призначив</th><th>Препарати</th>
-            <th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
+            <th>Журнал</th><th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
           ${doneRx.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
             <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
               <div class="sub2">${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||r.dx.name):r.dx.name)):""}</div></td>
             <td class="sub2">${esc(r.doctor)}</td>
+            <td>${canSetCat(r)
+              ? `<button class="btn sm ${r.cat?"":"danger"}" data-setcat="${r.id}">${r.cat?esc(CAT_NAME(r.cat)):"вказати"}</button>`
+              : `<span class="sub2">${r.cat?esc(CAT_NAME(r.cat)):"—"}</span>`}</td>
             <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`
                   + (l.from&&l.from.length?` <span class="sub2 mono">(${esc(l.from.map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · "))})</span>`:"")).join("<br>")}</td>
             <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
@@ -3313,6 +3369,7 @@ function viewReq(){
         </tbody></table></div>` : `<div class="empty"><strong>Історія заявок порожня</strong>Тут з'являться виконані та відхилені заявки.</div>`}
       </div>`;
     $("#rbody").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>reqDetails(b.dataset.view));
+    $("#rbody").querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
   }
 }
 function statusTag(r){
@@ -3552,6 +3609,9 @@ function newRxModal(cito){
         <datalist id="rx-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
       <div class="field"><label>Підрозділ</label><input type="text" id="rx-group" placeholder="1 рота, 2 взвод"></div>
       <div class="field"><label>Вік</label><input type="number" id="rx-age" min="0" max="120" placeholder="повних років"></div>
+      <div class="field"><label>Категорія обліку</label>
+        <select id="rx-cat"><option value="">— не вказано —</option>
+          ${CATS.map(c=>`<option value="${c[0]}">${c[1]}</option>`).join("")}</select></div>
       <div class="field" style="grid-column:1/-1"><label>Призначив</label>
         <input type="text" value="${esc(ME.name)} · ${LOCS[S.role].name}" disabled></div>
     </div>
@@ -3590,6 +3650,14 @@ function newRxModal(cito){
       ? "Терміновий рецепт не потребує погодження: списання відбувається одразу зі складу аптеки, поза ланцюгом постів."
       : "Призначення спершу перевіряє старша медсестра, після погодження списання йде за ланцюгом: пост медсестри → старша медсестра. Склад аптеки за призначеннями не списується."}</p>`,
     [{t:"Скасувати", f:close},{t:cito?"Виписати Cito!":"Створити призначення", cls:"primary", f:submit}]);
+
+  const rkEl = document.getElementById("rx-rank"), ctEl = document.getElementById("rx-cat");
+  if(rkEl && ctEl) rkEl.oninput = ()=>{
+    if(ctEl.dataset.manual === "1") return;
+    const g = guessCat(rkEl.value);
+    if(g) ctEl.value = g;
+  };
+  if(ctEl) ctEl.onchange = ()=>{ ctEl.dataset.manual = "1"; };
 
   attachPicker("rx-find", "rx-pick", rows, id => {
     const w = document.getElementById("rx-alt");
@@ -3741,12 +3809,13 @@ function newRxModal(cito){
     if(!lines.length) return toast("Додайте хоча б один препарат", true);
     const r = {id:uid("x"), no:"Р-"+String(++S.rxNo).padStart(4,"0"), docLoc:S.role, doctor:ME.name,
       patient:pat, age:parseInt(document.getElementById("rx-age").value,10) || null,
+      cat:document.getElementById("rx-cat").value,
       rank:document.getElementById("rx-rank").value.trim(),
       group:document.getElementById("rx-group").value.trim(), cito:!!cito, dx, dxNote:document.getElementById("rx-dxnote").value.trim(),
       comment:$("#rx-com").value.trim(), status: cito ? "pending" : "review", created:Date.now(),
       lines:lines.map(l=>({itemId:l.itemId, want:l.want, got:0}))};
     (S.rx = S.rx||[]).push(r);
-    log("Рецепт", `${cito ? "Виписано ТЕРМІНОВИЙ рецепт (Cito!)" : "Створено призначення"} ${r.no}, пацієнт ${pat}${patientLine(r)?" ("+patientLine(r)+")":""}, діагноз ${dxLabel(dx)}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no, dx:dx.code});
+    log("Рецепт", `${cito ? "Виписано ТЕРМІНОВИЙ рецепт (Cito!)" : "Створено призначення"} ${r.no}, пацієнт ${pat}${patientLine(r)?" ("+patientLine(r)+")":""}${r.cat?", "+CAT_NAME(r.cat):""}, діагноз ${dxLabel(dx)}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no, dx:dx.code});
     close(); toast(cito ? "Cito! Рецепт " + r.no + " передано поза чергою"
                         : "Призначення " + r.no + " передано на контроль старшій медсестрі"); render();
   }
@@ -3817,6 +3886,54 @@ function issueRxModal(id){
         : state === "issued" ? "Рецепт виконано повністю" : "Рецепт закрито частково");
     render();
   }
+}
+
+/* ---------- рознесення за журналами заднім числом ---------- */
+function setCatModal(id){
+  const r = (S.rx||[]).find(x=>x.id===id);
+  if(!r) return;
+  if(!canSetCat(r)) return toast("Категорію змінює той, хто виписав, старша медсестра або завідувач аптеки", true);
+  const hint = guessCat(r.rank);
+  modal(`Категорія обліку — ${esc(r.no)}`, `
+    <p class="sub2" style="margin-top:0">Пацієнт: <b>${esc(r.patient)}</b>${patientLine(r)?" · "+esc(patientLine(r)):""}.
+      Від категорії залежить, у який журнал потрапить запис.</p>
+    ${!r.cat && hint ? `<p class="sub2">За званням це схоже на «${CAT_NAME(hint)}».</p>` : ""}
+    <div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
+      ${CATS.map(c=>`<button type="button" class="btn ${r.cat===c[0]?"primary":""}" data-cc="${c[0]}"
+        style="text-align:left">${c[1]}${r.cat===c[0]?" — поточна":""}</button>`).join("")}
+      ${r.cat ? `<button type="button" class="btn danger" data-cc="" style="text-align:left">Прибрати категорію</button>` : ""}
+    </div>`,
+    [{t:"Закрити", f:close}]);
+  document.querySelectorAll("[data-cc]").forEach(b=>b.onclick=()=>{
+    const was = r.cat ? CAT_NAME(r.cat) : "не вказано";
+    r.cat = b.dataset.cc;
+    log("Рецепт", `Категорію обліку ${r.no} (пацієнт ${r.patient}) змінено: ${was} → ${r.cat ? CAT_NAME(r.cat) : "не вказано"}`, {rx:r.no});
+    close(); toast(r.cat ? "Записано в журнал «" + CAT_NAME(r.cat) + "»" : "Категорію прибрано"); render();
+  });
+}
+
+/* масове рознесення за званнями */
+function catBulkModal(){
+  const list = (S.rx||[]).filter(r => !r.cat);
+  if(!list.length) return toast("Усі записи вже рознесені за журналами");
+  const auto = list.map(r => ({r, g: guessCat(r.rank)})).filter(x => x.g);
+  const rest = list.filter(r => !guessCat(r.rank));
+  modal("Рознесення за журналами", `
+    <p class="sub2" style="margin-top:0">Записів без категорії: <b>${list.length}</b>.
+      За званням можна визначити ${auto.length}; решту ${rest.length} доведеться вказати вручну.</p>
+    ${auto.length ? `<div class="tw" style="max-height:260px"><table><thead><tr><th>№</th><th>Пацієнт</th>
+        <th>Звання</th><th>Журнал</th></tr></thead><tbody>
+      ${auto.map(({r,g})=>`<tr><td class="mono">${r.no}</td><td>${esc(r.patient)}</td>
+        <td class="sub2">${esc(r.rank||"—")}</td><td>${CAT_NAME(g)}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">За званнями визначити не вдалося</div>`}
+    ${rest.length ? `<p class="sub2" style="margin-top:12px">Без звання або з невизначеним званням:
+      ${esc(rest.slice(0,12).map(r=>r.no+" "+r.patient).join("; "))}${rest.length>12?" та інші":""}.</p>`:""}`,
+    [{t:"Скасувати", f:close},
+     ...(auto.length ? [{t:"Рознести " + auto.length, cls:"primary", f:()=>{
+        auto.forEach(({r,g}) => r.cat = g);
+        log("Рецепт", `Рознесено за журналами за званнями: ${auto.length} записів`);
+        close(); toast("Рознесено записів: " + auto.length); render();
+      }}] : [])]);
 }
 
 /* ---------- контроль призначення старшою медсестрою ---------- */
