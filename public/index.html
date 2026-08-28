@@ -1254,16 +1254,19 @@ const RANKS = ["курсант","солдат","старший солдат","м
   "молодший лейтенант","лейтенант","старший лейтенант","капітан","майор","підполковник","полковник",
   "працівник ЗСУ / НГУ"];
 /* Розподіл виписок за категоріями особового складу — три окремі журнали. */
-const CATS = [["off","Офіцери"],["cad","Курсанти"],["trn","Навчальна рота"]];
+const CATS = [["off","Офіцери"],["cad","Курсанти"],["trn","Навчальна рота"],["ctr","Військовослужбовці за контрактом"]];
+const CAT_SHORT = {off:"Офіцери", cad:"Курсанти", trn:"Навчальна рота", ctr:"Контрактники"};
 const canSetCat = r => ME.admin || S.role === "senior" || r.docLoc === S.role;
 const CAT_NAME = c => (CATS.find(x=>x[0]===c)||[null,"Не вказано"])[1];
 const OFF_RANKS = ["лейтенант","капітан","майор","підполковник","полковник","генерал"];
+const CTR_RANKS = ["солдат","сержант","старшина","матрос"];
 /* типова категорія за званням: офіцерські звання і курсант визначаються самі */
 function guessCat(rank){
   const r = String(rank||"").toLowerCase();
   if(!r) return "";
   if(r.indexOf("курсант") >= 0) return "cad";
   if(OFF_RANKS.some(x => r.indexOf(x) >= 0)) return "off";
+  if(CTR_RANKS.some(x => r.indexOf(x) >= 0)) return "ctr";
   return "";
 }
 const patientLine = r => [r.rank, r.group, r.cat ? CAT_NAME(r.cat) : ""].filter(Boolean).join(" · ");
@@ -3328,7 +3331,7 @@ function viewReq(){
           r.rank||"", r.group||"", r.dx?(r.dx.det||r.dx.sub||r.dx.code):"",
           r.dx?(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name)):"",
           item(l.itemId).name, l.got||0, item(l.itemId).unit])));
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a2), c[1].slice(0,28));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a2), CAT_SHORT[c[0]] || c[1].slice(0,28));
       });
       XLSX.writeFile(wb, "oblik-" + flt.from + "_" + flt.to + "-" + kind + ".xlsx");
       log("Система", `Вивантажено облік ${title} за період ${periodLabel}: ${all.length} записів`);
