@@ -1254,12 +1254,13 @@ const RANKS = ["курсант","солдат","старший солдат","м
   "молодший лейтенант","лейтенант","старший лейтенант","капітан","майор","підполковник","полковник",
   "працівник ЗСУ / НГУ"];
 /* Розподіл виписок за категоріями особового складу — три окремі журнали. */
-const CATS = [["off","Офіцери"],["cad","Курсанти"],["trn","Навчальна рота"],["ctr","Військовослужбовці за контрактом"]];
-const CAT_SHORT = {off:"Офіцери", cad:"Курсанти", trn:"Навчальна рота", ctr:"Контрактники"};
+const CATS = [["off","Офіцери"],["cad","Курсанти"],["trn","Навчальна рота"],["ctr","Військовослужбовці за контрактом"],["civ","Цивільні"],["hst","Історія хвороби"]];
+const CAT_SHORT = {off:"Офіцери", cad:"Курсанти", trn:"Навчальна рота", ctr:"Контрактники", civ:"Цивільні", hst:"Історія хвороби"};
 const canSetCat = r => ME.admin || S.role === "senior" || r.docLoc === S.role;
 const CAT_NAME = c => (CATS.find(x=>x[0]===c)||[null,"Не вказано"])[1];
 const OFF_RANKS = ["лейтенант","капітан","майор","підполковник","полковник","генерал"];
 const CTR_RANKS = ["солдат","сержант","старшина","матрос"];
+const CIV_RANKS = ["працівник","цивільн","службовець"];
 /* типова категорія за званням: офіцерські звання і курсант визначаються самі */
 function guessCat(rank){
   const r = String(rank||"").toLowerCase();
@@ -1267,6 +1268,7 @@ function guessCat(rank){
   if(r.indexOf("курсант") >= 0) return "cad";
   if(OFF_RANKS.some(x => r.indexOf(x) >= 0)) return "off";
   if(CTR_RANKS.some(x => r.indexOf(x) >= 0)) return "ctr";
+  if(CIV_RANKS.some(x => r.indexOf(x) >= 0)) return "civ";
   return "";
 }
 const patientLine = r => [r.rank, r.group, r.cat ? CAT_NAME(r.cat) : ""].filter(Boolean).join(" · ");
