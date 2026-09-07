@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 26.08.2026";
+const BUILD = "збірка 30.08.2026";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -1946,7 +1946,7 @@ function viewApteka(){
       <span class="eyebrow">${list.length} найменувань</span></header>
       ${list.length? `<div class="tw"><table><thead><tr><th>Найменування</th><th>Ном. номер</th><th>Діюча речовина</th><th>ATC</th><th>Од.</th>
         ${STOCK.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}<th class="num">Разом</th>
-        <th>Найближчий термін</th>${canEditExp?"<th></th>":""}</tr></thead><tbody>
+        <th>Найближчий термін</th><th></th>${canEditExp?"<th></th>":""}</tr></thead><tbody>
         ${list.map(i=>{const per=STOCK.map(l=>avail(l,i.id)); const tot=per.reduce((a,b)=>a+b,0);
           const bs=itemBatches(i.id); const near=bs[0]?bs[0].expiry:null; const sh=shelf(near); return `<tr>
           <td class="name">${esc(i.name)}</td><td class="mono sub2">${esc(i.nomen||"—")}</td>
@@ -1959,6 +1959,8 @@ function viewApteka(){
           <td class="num" style="font-weight:600">${qty(tot)}</td>
           <td>${bs.length? `<span class="tag ${sh.cls}"><span class="dot"></span>${dstr(near)}${bs.length>1?" +"+(bs.length-1):""}</span>`
                 : `<span class="sub2">немає партій</span>`}</td>
+          <td style="white-space:nowrap;text-align:right">
+            <button class="btn sm ${i.doc && i.doc.ind ? "" : "danger"}" data-doc="${i.id}">Інструкція</button></td>
           ${canEditExp? `<td style="white-space:nowrap;text-align:right">
             <button class="btn sm" data-inn="${i.id}">Класифікація</button>
             ${bs.length? `<button class="btn sm" data-exp="${i.id}">Термін</button>`:""}</td>`:""}
@@ -1967,6 +1969,7 @@ function viewApteka(){
     </div>`;
     $("#body").querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>expiryModal(b.dataset.exp));
     $("#body").querySelectorAll("[data-inn]").forEach(b=>b.onclick=()=>innModal(b.dataset.inn));
+    $("#body").querySelectorAll("[data-doc]").forEach(b=>b.onclick=()=>docModal(b.dataset.doc));
   }
 }
 
@@ -2031,6 +2034,70 @@ async function atcBulkModal(){
     log("Виправлення", `Автоматично проставлено коди ATC: ${n} позицій каталогу`);
     close(); toast("Проставлено кодів: " + n); render();
   }
+}
+
+/* ---------- інструкція до препарату ----------
+   Текст вносить завідувач аптеки; система нічого не додає від себе. */
+const DOC_FIELDS = [
+  ["ind",  "Показання"],
+  ["dose", "Спосіб застосування та дози"],
+  ["contra","Протипоказання"],
+  ["side", "Побічні реакції"],
+  ["store","Умови зберігання"],
+  ["note", "Примітки"]
+];
+function docModal(itemId){
+  const it = item(itemId);
+  const d0 = it.doc || {};
+  const canEdit = ME.loc === "apteka" && ME.admin;
+  const filled = DOC_FIELDS.some(f => (d0[f[0]]||"").trim());
+  const query = encodeURIComponent(it.inn || it.name);
+
+  const view = () => DOC_FIELDS.filter(f => (d0[f[0]]||"").trim()).map(f =>
+    `<div style="margin-bottom:12px"><div class="eyebrow">${f[1]}</div>
+      <div style="white-space:pre-wrap">${esc(d0[f[0]])}</div></div>`).join("");
+
+  modal(`Інструкція — ${esc(it.name)}`, `
+    <div class="sub2" style="margin-top:0">${esc(it.inn || "діюча речовина не вказана")}${it.atc?` · ATC ${esc(it.atc)}`:""}${
+      atcGroup(it.atc)?` · ${esc(atcGroup(it.atc)[1])}`:""}</div>
+    <div id="doc-body" style="margin-top:14px">
+      ${filled ? view() : `<div class="empty" style="padding:22px"><strong>Інструкцію ще не внесено</strong>${
+        canEdit ? "Натисніть «Редагувати», щоб заповнити." : "Заповнює завідувач аптеки."}</div>`}
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:11px">
+      <span class="sub2">Офіційна інструкція виробника:
+        <a href="https://compendium.com.ua/uk/search/?searchstring=${query}" target="_blank" rel="noopener"
+          style="color:var(--accent)">compendium.com.ua</a> ·
+        <a href="https://www.drlz.com.ua/" target="_blank" rel="noopener" style="color:var(--accent)">Державний реєстр ліків</a>
+      </span>
+    </div>
+    ${d0.by ? `<div class="sub2" style="margin-top:8px">Внесено: ${esc(d0.by)} · ${dtstr(d0.at)}</div>`:""}`,
+    [{t:"Закрити", f:close}, ...(canEdit ? [{t:"Редагувати", cls:"primary", f:()=>{ close(); docEditModal(itemId); }}] : [])]);
+}
+
+function docEditModal(itemId){
+  if(!(ME.loc === "apteka" && ME.admin)) return toast("Інструкції веде завідувач аптеки", true);
+  const it = item(itemId);
+  const d0 = it.doc || {};
+  modal(`Інструкція — ${esc(it.name)}`, `
+    <p class="sub2" style="margin-top:0">Заповнюйте за офіційною інструкцією виробника. Порожні розділи не показуються.</p>
+    ${DOC_FIELDS.map(f=>`<div class="field" style="margin-bottom:11px"><label>${f[1]}</label>
+      <textarea id="d-${f[0]}" style="min-height:${f[0]==="ind"||f[0]==="dose"?"80":"56"}px">${esc(d0[f[0]]||"")}</textarea></div>`).join("")}`,
+    [{t:"Скасувати", f:()=>{ close(); docModal(itemId); }},
+     {t:"Зберегти", cls:"primary", f:()=>{
+       const next = {};
+       DOC_FIELDS.forEach(f => { const v = document.getElementById("d-" + f[0]).value.trim(); if(v) next[f[0]] = v; });
+       const had = DOC_FIELDS.some(f => (d0[f[0]]||"").trim());
+       if(!Object.keys(next).length){
+         delete it.doc;
+         if(had) log("Виправлення", `Очищено інструкцію до «${it.name}»`);
+       }else{
+         next.by = ME.name; next.at = Date.now();
+         it.doc = next;
+         log("Виправлення", `${had ? "Оновлено" : "Внесено"} інструкцію до «${it.name}»`);
+       }
+       close(); toast("Збережено"); render();
+     }}]);
 }
 
 /* ---------- діюча речовина позиції каталогу ---------- */
