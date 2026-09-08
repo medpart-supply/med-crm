@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 30.08.2026";
+const BUILD = "збірка 02.09.2026 · нумерація Cito";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -930,7 +930,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 /* ---------- сховище ---------- */
 function blank(){
   return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], codes:{}, users:[],
-    org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0};
+    org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
   try{
@@ -956,6 +956,7 @@ function migrate(){
   if(typeof S.inv !== "number") S.inv = 0;
   if(!S.rx) S.rx = [];
   if(S.rxNo == null) S.rxNo = 0;
+  if(S.citoNo == null) S.citoNo = 0;
   const stuck = S.batches.filter(b=>b.loc==="doctors" && b.qty>0.0001);
   if(stuck.length){
     stuck.forEach(b=>{ addBatch("apteka", b.itemId, b.qty, b.price, b.expiry, b.src); b.qty = 0; });
@@ -1005,7 +1006,7 @@ function merge3(base, mine, theirs){
   const out = Object.assign({}, theirs);
   MERGE_ARRAYS.forEach(k => out[k] = mergeArr(base[k], mine[k], theirs[k]));
   out.log = (out.log||[]).sort((a,b)=>b.ts-a.ts).slice(0,1500);
-  ["inv","req","rxNo"].forEach(k => out[k] = Math.max(Number(mine[k])||0, Number(theirs[k])||0));
+  ["inv","req","rxNo","citoNo"].forEach(k => out[k] = Math.max(Number(mine[k])||0, Number(theirs[k])||0));
   delete out.role;
   return out;
 }
@@ -2046,6 +2047,35 @@ const DOC_FIELDS = [
   ["store","Умови зберігання"],
   ["note", "Примітки"]
 ];
+/* ---------- нумерація документів ---------- */
+function numModal(){
+  if(!ME.admin) return;
+  modal("Нумерація документів", `
+    <p class="sub2" style="margin-top:0">Вкажіть номер, який отримає <b>наступний</b> документ.
+      Знадобиться, щоб продовжити нумерацію паперових журналів.</p>
+    <div class="grid g2">
+      <div class="field"><label>Наступний рецепт Cito!</label>
+        <input type="number" id="n-cito" min="1" value="${(S.citoNo||0)+1}"></div>
+      <div class="field"><label>Наступне призначення (Р-)</label>
+        <input type="number" id="n-rx" min="1" value="${(S.rxNo||0)+1}"></div>
+      <div class="field"><label>Наступна заявка (З-)</label>
+        <input type="number" id="n-req" min="1" value="${(S.req||0)+1}"></div>
+    </div>
+    <p class="sub2" style="margin-top:12px">Рецепти Cito нумеруються просто числом, призначення — з префіксом «Р-»,
+      заявки — «З-». Зменшувати номер нижче вже виданих не варто: номери можуть повторитись.</p>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      const v = id2 => Math.max(1, parseInt(document.getElementById(id2).value, 10) || 1);
+      const c = v("n-cito"), r2 = v("n-rx"), q = v("n-req");
+      const ch = [];
+      if(S.citoNo !== c-1){ ch.push(`рецепт Cito: ${c}`); S.citoNo = c-1; }
+      if(S.rxNo !== r2-1){ ch.push(`призначення: Р-${String(r2).padStart(4,"0")}`); S.rxNo = r2-1; }
+      if(S.req !== q-1){ ch.push(`заявка: З-${String(q).padStart(4,"0")}`); S.req = q-1; }
+      if(!ch.length){ close(); return; }
+      log("Система", `Змінено нумерацію документів, наступні номери — ${ch.join("; ")}`);
+      close(); toast("Нумерацію оновлено"); render();
+    }}]);
+}
+
 function docModal(itemId){
   const it = item(itemId);
   const d0 = it.doc || {};
@@ -3899,7 +3929,9 @@ function newRxModal(cito){
     if(!dx) return toast("Оберіть діагноз за МКХ-10", true);
     if(dx.badSub) return toast("Код " + dx.badSub + " не належить блоку " + dx.code, true);
     if(!lines.length) return toast("Додайте хоча б один препарат", true);
-    const r = {id:uid("x"), no:"Р-"+String(++S.rxNo).padStart(4,"0"), docLoc:S.role, doctor:ME.name,
+    /* рецепти Cito мають власну нумерацію — вона продовжує паперовий журнал */
+    const no = cito ? String(++S.citoNo) : "Р-" + String(++S.rxNo).padStart(4, "0");
+    const r = {id:uid("x"), no, docLoc:S.role, doctor:ME.name,
       patient:pat, age:parseInt(document.getElementById("rx-age").value,10) || null,
       cat:document.getElementById("rx-cat").value,
       rank:document.getElementById("rx-rank").value.trim(),
@@ -4797,6 +4829,7 @@ function viewHist(){
     XLSX.writeFile(wb, "zhurnal-" + new Date().toISOString().slice(0,10) + ".xlsx");
     toast("Журнал вивантажено");
   });
+  if(ME.admin) act("Нумерація документів", numModal);
   if(ME.admin) act("Очищення даних", ()=>{
     const opts = [
       ["batches","Залишки медикаментів (усі підрозділи)", true],
@@ -4817,7 +4850,7 @@ function viewHist(){
         if(on("batches")){ done.push("залишки (" + S.batches.length + " партій)"); S.batches = []; }
         if(on("moves")){
           done.push("рухи: заявок " + S.requests.length + ", призначень " + (S.rx||[]).length);
-          S.requests = []; S.rx = []; S.req = 0; S.rxNo = 0;
+          S.requests = []; S.rx = []; S.req = 0; S.rxNo = 0; S.citoNo = 0;
         }
         if(on("items")){ done.push("каталог (" + S.items.length + " позицій)"); S.items = []; S.batches = []; }
         if(on("assets")){ done.push("майно (" + (S.assets||[]).length + " позицій)"); S.assets = []; }
