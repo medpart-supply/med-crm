@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 02.09.2026 · нумерація Cito";
+const BUILD = "збірка 05.09.2026 · правка призначень";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -4070,9 +4070,14 @@ function reviewRxModal(id){
   const before = r.lines.map(l => `${item(l.itemId).name} — ${qty(l.want)} ${item(l.itemId).unit}`).join("; ");
 
   modal(`Контроль і видача — призначення ${r.no}`, `
-    <div class="grid g3" style="margin-bottom:12px">
-      <div><div class="eyebrow">Пацієнт</div><div class="name">${esc(r.patient)}</div>
-        ${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</div>
+    <div class="row" style="margin-bottom:10px">
+      <div style="flex:1"><div class="eyebrow">Пацієнт</div><div class="name" id="rv-who">${esc(r.patient)}</div>
+        <div class="sub2" id="rv-line">${esc(patientLine(r)) || "дані пацієнта не заповнені"}</div>
+        <div class="sub2">Виписано ${dtstr(r.created)}</div></div>
+      <button type="button" class="btn sm" id="rv-edit">Виправити дані</button>
+    </div>
+    <div id="rv-form"></div>
+    <div class="grid g2" style="margin-bottom:12px">
       <div><div class="eyebrow">Призначив</div><div>${esc(r.doctor)}<div class="sub2">${LOCS[r.docLoc]?LOCS[r.docLoc].name:""}</div></div></div>
       <div><div class="eyebrow">Діагноз</div><div class="mono">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}
         <div class="sub2">${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||""):r.dx.name)):""}</div></div></div>
@@ -4090,6 +4095,67 @@ function reviewRxModal(id){
       <input type="text" id="rev-note" placeholder="Наприклад: зменшено дозу до наявного фасування"></div>
     <p class="sub2" style="margin-top:10px">Після погодження медикаменти списуються одразу за ланцюгом ${chain.map(l=>LOCS[l].short).join(" → ")}, у межах підрозділу — за принципом FEFO. Усі правки буде записано в журнал.</p>`,
     [{t:"Скасувати", f:close},{t:"Погодити та списати", cls:"primary", f:approve}]);
+
+  /* правка даних пацієнта: ПІБ, звання, підрозділ, категорія, дата виписки */
+  let editOpen = false;
+  const rvForm = document.getElementById("rv-form");
+  const rvBtn = document.getElementById("rv-edit");
+  const localDT = ts => { const d2 = new Date(ts);
+    return d2.getFullYear() + "-" + pad2(d2.getMonth()+1) + "-" + pad2(d2.getDate()) + "T" + pad2(d2.getHours()) + ":" + pad2(d2.getMinutes()); };
+  function drawEdit(){
+    if(!editOpen){ rvForm.innerHTML = ""; rvBtn.textContent = "Виправити дані"; return; }
+    rvBtn.textContent = "Згорнути";
+    rvForm.innerHTML = `<div class="card" style="margin-bottom:12px"><div class="pad">
+      <div class="grid g2">
+        <div class="field" style="grid-column:1/-1"><label>ПІБ пацієнта</label>
+          <input type="text" id="rv-pat" value="${esc(r.patient)}"></div>
+        <div class="field"><label>Звання</label>
+          <input type="text" id="rv-rank" list="rv-ranks" value="${esc(r.rank||"")}">
+          <datalist id="rv-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
+        <div class="field"><label>Підрозділ</label>
+          <input type="text" id="rv-unit" value="${esc(r.group||"")}" placeholder="1 рота, 2 взвод"></div>
+        <div class="field"><label>Категорія обліку</label>
+          <select id="rv-cat"><option value="">— не вказано —</option>
+            ${CATS.map(c=>`<option value="${c[0]}" ${r.cat===c[0]?"selected":""}>${c[1]}</option>`).join("")}</select></div>
+        <div class="field"><label>Дата й час виписки</label>
+          <input type="datetime-local" id="rv-date" value="${localDT(r.created)}"></div>
+      </div>
+      <button type="button" class="btn sm primary" id="rv-save" style="margin-top:10px">Зберегти дані пацієнта</button>
+    </div></div>`;
+    document.getElementById("rv-save").onclick = saveWho;
+    const rk = document.getElementById("rv-rank"), ct = document.getElementById("rv-cat");
+    rk.oninput = ()=>{ if(!ct.value){ const g = guessCat(rk.value); if(g) ct.value = g; } };
+  }
+  function saveWho(){
+    const el = i => document.getElementById(i);
+    const pat = el("rv-pat").value.trim();
+    if(!pat) return toast("ПІБ пацієнта не може бути порожнім", true);
+    const ch = [];
+    if(r.patient !== pat){ ch.push(`ПІБ: «${r.patient}» → «${pat}»`); r.patient = pat; }
+    const rk = el("rv-rank").value.trim();
+    if((r.rank||"") !== rk){ ch.push(`звання: «${r.rank||"—"}» → «${rk||"—"}»`); r.rank = rk; }
+    const un = el("rv-unit").value.trim();
+    if((r.group||"") !== un){ ch.push(`підрозділ: «${r.group||"—"}» → «${un||"—"}»`); r.group = un; }
+    const ct = el("rv-cat").value;
+    if((r.cat||"") !== ct){ ch.push(`категорія: «${r.cat?CAT_NAME(r.cat):"—"}» → «${ct?CAT_NAME(ct):"—"}»`); r.cat = ct; }
+    const dv = el("rv-date").value;
+    if(dv){
+      const ts = new Date(dv).getTime();
+      if(!isNaN(ts) && Math.abs(ts - r.created) > 60000){
+        ch.push(`дата виписки: ${dtstr(r.created)} → ${dtstr(ts)}`);
+        r.created = ts;
+      }
+    }
+    if(!ch.length) return toast("Змін немає");
+    log("Рецепт", `Старша медсестра виправила дані призначення ${r.no}: ${ch.join("; ")}`, {rx:r.no});
+    document.getElementById("rv-who").textContent = r.patient;
+    document.getElementById("rv-line").textContent = patientLine(r) || "дані пацієнта не заповнені";
+    editOpen = false; drawEdit();
+    toast("Дані пацієнта збережено");
+    save();
+  }
+  rvBtn.onclick = ()=>{ editOpen = !editOpen; drawEdit(); };
+  drawEdit();
 
   const draw = ()=>{
     document.getElementById("rev-lines").innerHTML = lines.length
