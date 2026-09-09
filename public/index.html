@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 12.09.2026 · склад фельдшера";
+const BUILD = "збірка 15.09.2026 · імпорт видач";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -929,7 +929,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], codes:{}, users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], contractors:{}, codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
@@ -950,6 +950,7 @@ async function load(){
 function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
   if(!S.codes) S.codes = {};
+  if(!S.contractors) S.contractors = {};
   ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
@@ -2855,24 +2856,27 @@ function drawIssues(loc, canEdit){
         <div class="n">${[...byUnit.keys()].slice(0,2).join(", ") || "—"}</div></div>
       <div class="stat"><div class="eyebrow">За останні 30 днів</div>
         <div class="v">${all.filter(x => Date.now() - x.at < 30*86400000).length}</div><div class="n">записів</div></div>
-      <div class="stat ok"><div class="eyebrow">Залишок складу</div>
-        <div class="v">${stockRows(loc).length}</div><div class="n">позицій у наявності</div></div>
+      <div class="stat ${all.filter(x=>!x.unit2).length?"crit":"ok"}"><div class="eyebrow">Без підрозділу</div>
+        <div class="v">${all.filter(x=>!x.unit2).length}</div><div class="n">потребують уточнення</div></div>
     </div>
     <div class="card"><header><h3>Видано на підрозділи — ${LOCS[loc].name}</h3>
       <span class="spacer"></span>
-      ${canEdit? `<button class="btn sm primary" id="io-new">Видати на підрозділ</button>`:""}
+      ${canEdit? `<button class="btn sm primary" id="io-new">Видати на підрозділ</button>
+                  <button class="btn sm" id="io-imp">Завантажити з Excel</button>`:""}
       <button class="btn sm" id="io-exp">Експорт</button></header>
       ${rows.length ? `<div class="tw" style="max-height:none"><table><thead><tr>
-        <th>Дата</th><th>Препарат</th><th class="num">Кількість</th><th>Підрозділ</th><th>Отримувач</th>
-        <th>Підстава</th><th>Видав</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
+        <th>Дата</th><th>Препарат</th><th class="num">Кількість</th><th>Контрагент</th><th>Підрозділ</th>
+        <th>Отримувач</th><th>Підстава</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
       ${rows.map(x=>`<tr>
         <td class="mono sub2">${dstr(x.at)}</td>
         <td class="name">${esc(x.item)}${x.nomen?`<div class="sub2 mono">${esc(x.nomen)}</div>`:""}</td>
         <td class="num">${qty(x.qty)} ${esc(x.itemUnit||"шт")}</td>
-        <td>${esc(x.unit2 || "—")}</td>
+        <td class="sub2">${esc(x.contractor || "—")}</td>
+        <td>${canEdit
+          ? `<button class="btn sm ${x.unit2?"":"danger"}" data-iou="${x.id}">${x.unit2?esc(x.unit2):"вказати"}</button>`
+          : esc(x.unit2 || "—")}</td>
         <td>${esc(x.to || "—")}${x.rank?`<div class="sub2">${esc(x.rank)}</div>`:""}</td>
-        <td class="sub2">${esc(x.note || "—")}</td>
-        <td class="sub2">${esc(x.by)}</td>
+        <td class="sub2">${esc(x.note || "—")}<div class="sub2">${esc(x.by)}</div></td>
         ${canEdit?`<td style="text-align:right"><button class="btn sm danger" data-iod="${x.id}">Скасувати</button></td>`:""}
       </tr>`).join("")}
       </tbody></table></div>` : `<div class="empty"><strong>${all.length ? "Нічого не знайдено" : "Видач ще не було"}</strong>${
@@ -2882,6 +2886,8 @@ function drawIssues(loc, canEdit){
   if(canEdit && document.getElementById("io-new")) document.getElementById("io-new").onclick = ()=>issueOutModal(loc, null);
   document.getElementById("io-exp").onclick = ()=>exportIssues(loc);
   $("#ubody").querySelectorAll("[data-iod]").forEach(b=>b.onclick=()=>undoIssue(loc, b.dataset.iod));
+  $("#ubody").querySelectorAll("[data-iou]").forEach(b=>b.onclick=()=>issueUnitModal(loc, b.dataset.iou));
+  if(canEdit && document.getElementById("io-imp")) document.getElementById("io-imp").onclick = ()=>issueImportModal(loc);
 }
 
 function issueOutModal(loc, itemId){
@@ -2962,14 +2968,181 @@ function undoIssue(loc, id){
 }
 
 function exportIssues(loc){
-  const aoa = [["Дата","Препарат","Номенклатурний номер","Кількість","Одиниця","Підрозділ","Отримувач","Звання","Підстава","Видав"]];
-  issuesAt(loc).sort((a,b)=>a.at-b.at).forEach(x=>aoa.push([dstr(x.at), x.item, x.nomen||"", x.qty,
-    x.itemUnit||"шт", x.unit2||"", x.to||"", x.rank||"", x.note||"", x.by]));
+  const aoa = [["Дата","Контрагент","Підрозділ","Препарат","Номенклатурний номер","Кількість","Одиниця","Отримувач","Звання","Підстава","Видав"]];
+  issuesAt(loc).sort((a,b)=>a.at-b.at).forEach(x=>aoa.push([dstr(x.at), x.contractor||"", x.unit2||"", x.item, x.nomen||"",
+    x.qty, x.itemUnit||"шт", x.to||"", x.rank||"", x.note||"", x.by]));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Видано на підрозділи");
   XLSX.writeFile(wb, "vydacha-pidrozdilam-" + ymd(today()) + ".xlsx");
   log("Система", `Вивантажено журнал видач на підрозділи (${LOCS[loc].name})`);
   toast("Файл сформовано");
+}
+
+/* ---------- імпорт видач на контрагентів ----------
+   Шаблон: Контрагент | Номенклатура | Найменування номенклатури | Кількість | Одиниці виміру | Ціна */
+function issueImportModal(loc){
+  modal(`Завантаження видач — ${LOCS[loc].name}`, `
+    <div class="drop" id="ii-drop">
+      <strong>Перетягніть файл Excel або натисніть, щоб вибрати</strong>
+      <span>Колонки: контрагент, номенклатура, найменування номенклатури, кількість, одиниці виміру, ціна</span>
+      <input type="file" id="ii-file" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div class="row" style="margin-top:12px;align-items:center">
+      <button class="btn sm" id="ii-tpl">Шаблон</button>
+      <div class="field" style="width:170px"><label>Дата видачі</label>
+        <input type="date" id="ii-date" value="${ymd(today())}"></div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)">
+        <input type="checkbox" id="ii-off" style="width:auto"> списати зі складу</label>
+    </div>
+    <p class="sub2" style="margin-top:8px">Якщо майно вже видано фізично, а залишки внесені після цього, списувати не потрібно —
+      записи лише зафіксують видачу. Підрозділ для кожного контрагента вкажете після завантаження.</p>
+    <div id="ii-prev" style="margin-top:14px"></div>`,
+    [{t:"Закрити", f:close}]);
+
+  const drop = document.getElementById("ii-drop"), file = document.getElementById("ii-file");
+  drop.onclick = ()=>file.click();
+  drop.ondragover = e=>{e.preventDefault(); drop.classList.add("over");};
+  drop.ondragleave = ()=>drop.classList.remove("over");
+  drop.ondrop = e=>{e.preventDefault(); drop.classList.remove("over"); if(e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);};
+  file.onchange = e=>{ if(e.target.files[0]) read(e.target.files[0]); };
+  document.getElementById("ii-tpl").onclick = ()=>{
+    const aoa = [["Контрагент","Номенклатура","Найменування номенклатури","Кількість","Одиниці виміру","Ціна"],
+      ["1 рота","3005.90.4","Бинт марлевий 7м х 14см",20,"шт",18.4],
+      ["2 рота","9018.90.8","Джгут кровоспинний",5,"шт",210]];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Видачі");
+    XLSX.writeFile(wb, "shablon-vydach.xlsx");
+  };
+
+  function read(f){
+    const fr = new FileReader();
+    fr.onload = ev=>{
+      try{
+        const wb = XLSX.read(ev.target.result, {type:"array", cellDates:true});
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, raw:true, defval:""});
+        parse(aoa, f.name);
+      }catch(err){ toast("Не вдалося прочитати файл: " + err.message, true); }
+    };
+    fr.readAsArrayBuffer(f);
+  }
+
+  /* у цьому шаблоні «Номенклатура» — це код, а назва в окремій колонці */
+  function mapIssue(header){
+    const m = {};
+    header.forEach((h, i) => {
+      const t = String(h||"").toLowerCase().trim();
+      if(m.contractor == null && (t.indexOf("контрагент") >= 0 || t.indexOf("отримувач") >= 0)) m.contractor = i;
+      else if(m.name == null && t.indexOf("найменування") >= 0) m.name = i;
+      else if(m.nomen == null && t.indexOf("номенклатур") >= 0) m.nomen = i;
+      else if(m.qty == null && (t.indexOf("кількість") >= 0 || t.indexOf("к-сть") >= 0)) m.qty = i;
+      else if(m.unit == null && t.indexOf("одиниц") >= 0) m.unit = i;
+      else if(m.price == null && t.indexOf("ціна") >= 0) m.price = i;
+    });
+    if(m.name == null && m.nomen != null){ m.name = m.nomen; m.nomen = null; }
+    return m;
+  }
+
+  function parse(aoa, fname){
+    let hi = -1, map = null;
+    for(let i=0;i<Math.min(aoa.length,15);i++){
+      const m = mapIssue(aoa[i]);
+      if(m.name != null && m.qty != null){ hi = i; map = m; break; }
+    }
+    if(hi < 0){
+      document.getElementById("ii-prev").innerHTML = `<div class="empty"><strong>Не знайдено заголовки</strong>Потрібні щонайменше «Найменування номенклатури» та «Кількість».</div>`;
+      return;
+    }
+    const rows = [];
+    for(let i=hi+1;i<aoa.length;i++){
+      const r0 = aoa[i]; if(!r0) continue;
+      const nm = String(r0[map.name]||"").trim(); if(!nm) continue;
+      const q = num(r0[map.qty]); if(q <= 0) continue;
+      rows.push({
+        contractor: map.contractor!=null ? String(r0[map.contractor]||"").trim() : "",
+        name: nm,
+        nomen: map.nomen!=null ? String(r0[map.nomen]||"").trim() : "",
+        qty: q,
+        unit: map.unit!=null ? (String(r0[map.unit]||"").trim() || "шт") : "шт",
+        price: map.price!=null ? num(r0[map.price]) : 0
+      });
+    }
+    if(!rows.length){
+      document.getElementById("ii-prev").innerHTML = `<div class="empty"><strong>Рядків не знайдено</strong>Перевірте кількості у файлі.</div>`;
+      return;
+    }
+    const contractors = [...new Set(rows.map(r => r.contractor).filter(Boolean))];
+    const sum = rows.reduce((s2,r)=>s2 + r.qty*r.price, 0);
+    document.getElementById("ii-prev").innerHTML = `<div class="card"><header>
+        <h3>Перевірка: ${rows.length} рядків · ${money(sum)} грн</h3>
+        <span class="spacer"></span><span class="eyebrow">${esc(fname)}</span></header>
+      <div class="tw" style="max-height:260px"><table><thead><tr><th>Контрагент</th><th>Найменування</th>
+        <th>Ном.</th><th class="num">К-сть</th><th>Од.</th><th class="num">Ціна</th></tr></thead><tbody>
+        ${rows.map(r=>`<tr><td>${esc(r.contractor||"—")}</td><td>${esc(r.name)}</td>
+          <td class="mono sub2">${esc(r.nomen||"—")}</td><td class="num">${qty(r.qty)}</td>
+          <td>${esc(r.unit)}</td><td class="num">${money(r.price)}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="pad"><span class="sub2">Контрагентів: ${contractors.length}${contractors.length?" — "+esc(contractors.slice(0,6).join("; ")):""}.
+        Підрозділ для кожного вкажете в журналі.</span>
+        <div style="margin-top:10px"><button class="btn primary" id="ii-commit">Внести ${rows.length} записів</button></div></div>
+    </div>`;
+
+    document.getElementById("ii-commit").onclick = ()=>{
+      const when = new Date(document.getElementById("ii-date").value || ymd(today())).getTime();
+      const off = document.getElementById("ii-off").checked;
+      let added = 0, short = [];
+      rows.forEach(r => {
+        const it = findItem(r.name, r.nomen, r.unit);
+        let parts = [];
+        if(off){
+          const has = avail(loc, it.id);
+          const take = Math.min(has, r.qty);
+          if(take < r.qty - 0.0001) short.push(`${r.name} (є ${qty(has)})`);
+          if(take > 0) parts = takeFEFO(loc, it.id, take).taken
+            .map(x=>({qty:x.qty, price:x.price, expiry:x.expiry, src:x.src}));
+        }
+        (S.issues = S.issues || []).push({id:uid("io"), loc, itemId:it.id, item:it.name,
+          nomen:it.nomen||"", itemUnit:it.unit, qty:r.qty,
+          contractor:r.contractor, unit2:(S.contractors||{})[r.contractor] || "",
+          to:"", rank:"", note:"завантажено з файлу" + (r.price?`, ціна ${money(r.price)}`:""),
+          by:ME.name, at:when, parts});
+        added++;
+      });
+      log("Видача", `${LOCS[loc].name}: завантажено ${added} записів видач на контрагентів`
+        + (off ? " зі списанням зі складу" : " без списання")
+        + (short.length ? `. Не вистачило: ${short.join("; ")}` : ""));
+      close();
+      toast("Внесено записів: " + added + (short.length ? ", частина без списання" : ""));
+      render();
+    };
+  }
+}
+
+/* підрозділ для контрагента — разом із запам'ятовуванням */
+function issueUnitModal(loc, id){
+  const x = (S.issues||[]).find(y => y.id === id);
+  if(!x) return;
+  const same = (S.issues||[]).filter(y => y.loc === loc && x.contractor && y.contractor === x.contractor && !y.unit2).length;
+  const known = [...new Set((S.issues||[]).map(y => y.unit2).filter(Boolean))];
+  modal(`Підрозділ — ${esc(x.contractor || x.item)}`, `
+    <p class="sub2" style="margin-top:0">${x.contractor ? `Контрагент: <b>${esc(x.contractor)}</b>. ` : ""}Видано ${dstr(x.at)}: ${esc(x.item)} — ${qty(x.qty)} ${esc(x.itemUnit||"шт")}.</p>
+    <div class="field" style="margin-top:10px"><label>Підрозділ</label>
+      <input type="text" id="iu-unit" list="iu-list" value="${esc(x.unit2||"")}" placeholder="1 рота, 2 взвод">
+      <datalist id="iu-list">${known.map(u=>`<option value="${esc(u)}"></option>`).join("")}</datalist></div>
+    ${same > 1 ? `<label style="display:flex;gap:8px;align-items:center;margin-top:11px;font-size:13px">
+      <input type="checkbox" id="iu-all" checked style="width:auto"> застосувати до всіх записів цього контрагента (${same})</label>`:""}
+    <p class="sub2" style="margin-top:10px">Зіставлення запам'ятається — наступні завантаження підставлять підрозділ самі.</p>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      const v = document.getElementById("iu-unit").value.trim();
+      if(!v) return toast("Вкажіть підрозділ", true);
+      const all = document.getElementById("iu-all");
+      let n = 0;
+      if(all && all.checked && x.contractor){
+        (S.issues||[]).forEach(y => { if(y.loc === loc && y.contractor === x.contractor && !y.unit2){ y.unit2 = v; n++; } });
+      }else{ x.unit2 = v; n = 1; }
+      if(x.contractor){ S.contractors = S.contractors || {}; S.contractors[x.contractor] = v; }
+      log("Видача", `Контрагенту «${x.contractor || x.item}» призначено підрозділ «${v}» — оновлено ${n} записів`);
+      close(); toast("Збережено"); render();
+    }}]);
 }
 
 /* ---------- одна позиція: додавання і редагування ---------- */
