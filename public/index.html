@@ -900,11 +900,11 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 09.09.2026 · скасування видачі";
+const BUILD = "збірка 12.09.2026 · склад фельдшера";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
-let sub = {apteka:"stock", req:"pending", units:"senior", feld:"meds", terms:"mine", jour:"temp", jourF:"out"};
+let sub = {apteka:"stock", req:"pending", units:"senior", feld:"stock", terms:"mine", jour:"temp", jourF:"out"};
 let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all"};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
@@ -929,7 +929,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], codes:{}, users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
@@ -950,7 +950,7 @@ async function load(){
 function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
   if(!S.codes) S.codes = {};
-  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
@@ -985,7 +985,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -2672,8 +2672,8 @@ function viewUnits(){
   </div>
   <div class="row" style="margin-bottom:14px">
     ${cur==="feldsher" ? `<div class="seg">
-        <button data-fs="meds" class="${sub.feld==="meds"?"on":""}">Медикаменти</button>
-        <button data-fs="assets" class="${sub.feld==="assets"?"on":""}">Майно фельдшера</button>
+        <button data-fs="stock" class="${sub.feld==="stock"?"on":""}">Склад фельдшера</button>
+        <button data-fs="out" class="${sub.feld==="out"?"on":""}">Видано на підрозділи</button>
       </div>`:""}
     <input type="text" id="uq" placeholder="Пошук за назвою або номенклатурним номером" style="max-width:340px" value="${esc(flt.unit)}">
   </div>
@@ -2688,13 +2688,14 @@ function viewUnits(){
 
   /* залишки обраного підрозділу з розбивкою по партіях */
   function drawUnit(){
-    if(cur==="feldsher" && sub.feld==="assets") return drawAssets(cur, canEdit);
+    if(cur==="feldsher" && sub.feld==="out") return drawIssues(cur, canEdit);
     const q = flt.unit.trim().toLowerCase();
     const rows = stockRows(cur).filter(r=> !q || r.item.name.toLowerCase().includes(q) || (r.item.nomen||"").toLowerCase().includes(q));
     const u = unitSummary(cur);
     $("#ubody").innerHTML = `<div class="card"><header><h3>${LOCS[cur].name} — медикаменти на залишках</h3>
         <span class="spacer"></span>
         <span class="eyebrow" style="margin-right:6px">${rows.length} позицій · ${qty(u.qty)} од. · ${money(u.sum)} грн</span>
+        ${canEdit && LOCS[cur].supplier ? `<button class="btn sm primary" id="u-order">Замовити в ${LOCS[LOCS[cur].supplier].short}</button>`:""}
         ${canEdit? `<button class="btn sm" id="u-win">Оприбуткувати з Excel</button>
                     <button class="btn sm" id="u-woff">Списати по накладній</button>`:""}</header>
       ${rows.length ? `<div class="tw"><table><thead><tr>
@@ -2710,14 +2711,45 @@ function viewUnits(){
               return `<span class="tag ${sh.cls}" title="${esc(sh.label)} · ${money(b.price)} грн за ${esc(r.item.unit)}"><span class="dot"></span>${qty(b.qty)} до ${dstr(b.expiry)} · ${money(b.price)}</span>`}).join("")}
           </div></td>
           <td class="num">${money(r.sum)}</td>
-          ${canEdit?`<td style="text-align:right"><button class="btn sm" data-off="${r.itemId}">Списати</button></td>`:""}
+          ${canEdit?`<td style="white-space:nowrap;text-align:right">
+            ${cur==="feldsher"?`<button class="btn sm" data-give="${r.itemId}">Видати</button>`:""}
+            <button class="btn sm" data-off="${r.itemId}">Списати</button></td>`:""}
         </tr>`).join("")}
       </tbody></table></div>` : `<div class="empty"><strong>У підрозділі немає залишків</strong>${
         LOCS[cur].supplier ? "Медикаменти надходять сюди за заявкою до "+LOCS[LOCS[cur].supplier].name+"." : ""}</div>`}
-    </div>`;
+    </div>
+    ${cur==="feldsher" ? drawAssetsCard(cur, canEdit) + drawSupplyStock(cur, canEdit) : ""}`;
     $("#ubody").querySelectorAll("[data-off]").forEach(b=>b.onclick=()=>writeOffModal(cur, b.dataset.off));
+    $("#ubody").querySelectorAll("[data-give]").forEach(b=>b.onclick=()=>issueOutModal(cur, b.dataset.give));
     if(canEdit && document.getElementById("u-woff")) document.getElementById("u-woff").onclick = ()=>writeOffImportModal(cur);
     if(canEdit && document.getElementById("u-win")) document.getElementById("u-win").onclick = ()=>importModal(cur);
+    if(canEdit && document.getElementById("u-order")) document.getElementById("u-order").onclick = ()=>newReqModal();
+    bindAssets(cur, canEdit);
+    $("#ubody").querySelectorAll("[data-ord]").forEach(b=>b.onclick=()=>newReqModal(b.dataset.ord));
+  }
+
+  /* що є в постачальника — щоб замовити собі на склад */
+  function drawSupplyStock(loc, canEdit){
+    const src = LOCS[loc].supplier;
+    if(!src) return "";
+    const q2 = flt.unit.trim().toLowerCase();
+    const rows2 = stockRows(src).filter(r => !q2 || r.item.name.toLowerCase().includes(q2) || (r.item.nomen||"").toLowerCase().includes(q2));
+    const mine = new Map(stockRows(loc).map(r => [r.itemId, r.qty]));
+    return `<div class="card" style="margin-top:14px"><header><h3>Наявне на складі ${LOCS[src].name}</h3>
+        <span class="spacer"></span><span class="eyebrow">${rows2.length} позицій · замовляється заявкою</span></header>
+      ${rows2.length ? `<div class="tw" style="max-height:340px"><table><thead><tr>
+        <th>Препарат</th><th>Ном. номер</th><th class="num">На складі</th><th class="num">У мене</th>
+        <th>Найближчий термін</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
+        ${rows2.map(r=>{const sh=shelf(r.nearest); const have=mine.get(r.itemId)||0; return `<tr>
+          <td class="name">${esc(r.item.name)}</td>
+          <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
+          <td class="num">${qty(r.qty)} ${esc(r.item.unit)}</td>
+          <td class="num" style="color:${have?"var(--ok)":"var(--faint)"}">${have?qty(have):"—"}</td>
+          <td><span class="tag ${sh.cls}"><span class="dot"></span>${dstr(r.nearest)}</span></td>
+          ${canEdit?`<td style="text-align:right"><button class="btn sm" data-ord="${r.itemId}">Замовити</button></td>`:""}
+        </tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>На складі ${LOCS[src].name} немає залишків</strong></div>`}
+    </div>`;
   }
 
   /* ланцюг «старша медсестра → пост» */
@@ -2758,12 +2790,16 @@ function viewUnits(){
 const assetsAt = loc => (S.assets||[]).filter(a=>a.loc===loc);
 
 function drawAssets(loc, canEdit){
+  $("#ubody").innerHTML = drawAssetsCard(loc, canEdit);
+  bindAssets(loc, canEdit);
+}
+function drawAssetsCard(loc, canEdit){
   const q = flt.unit.trim().toLowerCase();
   const all = assetsAt(loc).sort((a,b)=>a.name.localeCompare(b.name,"uk"));
   const rows = all.filter(a=> !q || a.name.toLowerCase().includes(q) || (a.nomen||"").toLowerCase().includes(q));
   const sum = all.reduce((s,a)=>s+a.qty*(a.price||0),0);
 
-  $("#ubody").innerHTML = `<div class="card"><header><h3>Майно — ${LOCS[loc].name}</h3>
+  return `<div class="card" style="margin-top:14px"><header><h3>Майно — ${LOCS[loc].name}</h3>
       <span class="spacer"></span>
       <span class="eyebrow" style="margin-right:4px">${all.length} найменувань · ${money(sum)} грн</span>
       ${canEdit? `<button class="btn sm" id="as-imp">Завантажити з Excel</button>
@@ -2786,15 +2822,154 @@ function drawAssets(loc, canEdit){
     </tbody></table></div>` : `<div class="empty"><strong>${all.length? "Нічого не знайдено" : "Майно ще не внесено"}</strong>${
       all.length? "Змініть пошуковий запит." : (canEdit? "Завантажте перелік з Excel або додайте позиції по одній." : "Перелік веде фельдшер.")}</div>`}
   </div>`;
-
+}
+function bindAssets(loc, canEdit){
   const b = id => document.getElementById(id);
-  if(canEdit){
+  if(!b("as-exp")) return;
+  if(canEdit && b("as-imp")){
     b("as-imp").onclick = ()=>assetImportModal(loc);
     b("as-new").onclick = ()=>assetModal(loc, null);
     $("#ubody").querySelectorAll("[data-aed]").forEach(x=>x.onclick=()=>assetModal(loc, x.dataset.aed));
     $("#ubody").querySelectorAll("[data-adel]").forEach(x=>x.onclick=()=>assetDelete(loc, x.dataset.adel));
   }
   b("as-exp").onclick = ()=>exportAssets(loc);
+}
+
+/* ---------- видача фельдшера на підрозділи ---------- */
+const issuesAt = loc => (S.issues || []).filter(x => x.loc === loc);
+
+function drawIssues(loc, canEdit){
+  const q = flt.unit.trim().toLowerCase();
+  const all = issuesAt(loc).sort((a,b) => b.at - a.at);
+  const rows = all.filter(x => !q || x.item.toLowerCase().includes(q) || (x.unit2||"").toLowerCase().includes(q)
+    || (x.to||"").toLowerCase().includes(q));
+  const total = all.reduce((s2,x) => s2 + x.qty, 0);
+  const byUnit = new Map();
+  all.forEach(x => byUnit.set(x.unit2 || "не вказано", (byUnit.get(x.unit2 || "не вказано") || 0) + 1));
+
+  $("#ubody").innerHTML = `
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="stat acc"><div class="eyebrow">Видач</div><div class="v">${all.length}</div>
+        <div class="n">${qty(total)} од. загалом</div></div>
+      <div class="stat"><div class="eyebrow">Підрозділів</div><div class="v">${byUnit.size}</div>
+        <div class="n">${[...byUnit.keys()].slice(0,2).join(", ") || "—"}</div></div>
+      <div class="stat"><div class="eyebrow">За останні 30 днів</div>
+        <div class="v">${all.filter(x => Date.now() - x.at < 30*86400000).length}</div><div class="n">записів</div></div>
+      <div class="stat ok"><div class="eyebrow">Залишок складу</div>
+        <div class="v">${stockRows(loc).length}</div><div class="n">позицій у наявності</div></div>
+    </div>
+    <div class="card"><header><h3>Видано на підрозділи — ${LOCS[loc].name}</h3>
+      <span class="spacer"></span>
+      ${canEdit? `<button class="btn sm primary" id="io-new">Видати на підрозділ</button>`:""}
+      <button class="btn sm" id="io-exp">Експорт</button></header>
+      ${rows.length ? `<div class="tw" style="max-height:none"><table><thead><tr>
+        <th>Дата</th><th>Препарат</th><th class="num">Кількість</th><th>Підрозділ</th><th>Отримувач</th>
+        <th>Підстава</th><th>Видав</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
+      ${rows.map(x=>`<tr>
+        <td class="mono sub2">${dstr(x.at)}</td>
+        <td class="name">${esc(x.item)}${x.nomen?`<div class="sub2 mono">${esc(x.nomen)}</div>`:""}</td>
+        <td class="num">${qty(x.qty)} ${esc(x.itemUnit||"шт")}</td>
+        <td>${esc(x.unit2 || "—")}</td>
+        <td>${esc(x.to || "—")}${x.rank?`<div class="sub2">${esc(x.rank)}</div>`:""}</td>
+        <td class="sub2">${esc(x.note || "—")}</td>
+        <td class="sub2">${esc(x.by)}</td>
+        ${canEdit?`<td style="text-align:right"><button class="btn sm danger" data-iod="${x.id}">Скасувати</button></td>`:""}
+      </tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>${all.length ? "Нічого не знайдено" : "Видач ще не було"}</strong>${
+        all.length ? "Змініть пошуковий запит." : (canEdit ? "Натисніть «Видати на підрозділ»." : "")}</div>`}
+    </div>`;
+
+  if(canEdit && document.getElementById("io-new")) document.getElementById("io-new").onclick = ()=>issueOutModal(loc, null);
+  document.getElementById("io-exp").onclick = ()=>exportIssues(loc);
+  $("#ubody").querySelectorAll("[data-iod]").forEach(b=>b.onclick=()=>undoIssue(loc, b.dataset.iod));
+}
+
+function issueOutModal(loc, itemId){
+  const rows = stockRows(loc);
+  if(!rows.length) return toast("На складі немає залишків", true);
+  modal(`Видача на підрозділ — ${LOCS[loc].name}`, `
+    <div class="field" style="margin-bottom:8px">
+      <label>Препарат <span class="eyebrow" id="io-cnt" style="margin-left:6px"></span></label>
+      <input type="text" id="io-find" placeholder="пошук за назвою або номенклатурним номером" style="margin-bottom:6px">
+      <select id="io-pick"></select>
+      <div class="sub2" id="io-have" style="margin-top:5px"></div></div>
+    <div class="grid g2">
+      <div class="field"><label>Кількість</label><input type="number" id="io-qty" step="any" min="0" value="1"></div>
+      <div class="field"><label>Дата видачі</label><input type="date" id="io-date" value="${ymd(today())}"></div>
+      <div class="field"><label>Підрозділ-отримувач</label>
+        <input type="text" id="io-unit" list="io-units" placeholder="1 рота, 2 взвод">
+        <datalist id="io-units">${[...new Set(issuesAt(loc).map(x=>x.unit2).filter(Boolean))]
+          .map(u=>`<option value="${esc(u)}"></option>`).join("")}</datalist></div>
+      <div class="field"><label>Отримувач — прізвище та ініціали</label><input type="text" id="io-to"></div>
+      <div class="field"><label>Звання</label>
+        <input type="text" id="io-rank" list="io-ranks">
+        <datalist id="io-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
+      <div class="field"><label>Підстава</label><input type="text" id="io-note" placeholder="накладна, розпорядження"></div>
+    </div>
+    <p class="sub2" style="margin-top:10px">Видане списується зі складу ${LOCS[loc].name} за принципом FEFO.</p>`,
+    [{t:"Скасувати", f:close},{t:"Видати", cls:"primary", f:go}]);
+
+  attachPicker("io-find", "io-pick", rows, id => {
+    const r = rows.find(x => x.itemId === id);
+    const h = document.getElementById("io-have");
+    if(h) h.textContent = r ? `Наявно ${qty(r.qty)} ${r.item.unit}, найближчий термін ${dstr(r.nearest)}` : "";
+  });
+  if(itemId){
+    const sel = document.getElementById("io-pick");
+    if([...sel.options].some(o => o.value === itemId)){ sel.value = itemId; sel.dispatchEvent(new Event("change")); }
+  }
+
+  function go(){
+    const el = i => document.getElementById(i);
+    const id = el("io-pick").value, q = parseFloat(el("io-qty").value) || 0;
+    if(!id) return toast("Оберіть препарат", true);
+    if(q <= 0) return toast("Вкажіть кількість більшу за нуль", true);
+    const have = avail(loc, id);
+    if(q > have + 0.0001) return toast("На складі лише " + qty(have) + " " + item(id).unit, true);
+    const unit2 = el("io-unit").value.trim();
+    if(!unit2) return toast("Вкажіть підрозділ-отримувач", true);
+
+    const taken = takeFEFO(loc, id, q).taken;
+    const it = item(id);
+    const rec = {id:uid("io"), loc, itemId:id, item:it.name, nomen:it.nomen || "", itemUnit:it.unit,
+      qty:q, unit2, to:el("io-to").value.trim(), rank:el("io-rank").value.trim(),
+      note:el("io-note").value.trim(), by:ME.name,
+      at:new Date(el("io-date").value || ymd(today())).getTime(),
+      parts:taken.map(x=>({qty:x.qty, price:x.price, expiry:x.expiry, src:x.src}))};
+    (S.issues = S.issues || []).push(rec);
+    log("Видача", `${LOCS[loc].name} видав на підрозділ ${unit2}: ${it.name} — ${qty(q)} ${it.unit}`
+      + (rec.to ? `, отримувач ${rec.to}` : "") + (rec.note ? `. Підстава: ${rec.note}` : ""));
+    close(); toast("Видано " + qty(q) + " " + it.unit); render();
+  }
+}
+
+function undoIssue(loc, id){
+  const x = (S.issues||[]).find(y => y.id === id);
+  if(!x) return;
+  modal("Скасування видачі", `
+    <p style="margin-top:0">Повернути на склад <b>${esc(x.item)}</b> — ${qty(x.qty)} ${esc(x.itemUnit||"шт")},
+      видані ${dstr(x.at)} на підрозділ «${esc(x.unit2||"—")}»?</p>
+    <p class="sub2">Медикаменти повернуться на ті самі партії, запис буде вилучено з журналу видач.</p>`,
+    [{t:"Скасувати", f:close},{t:"Повернути на склад", cls:"danger", f:()=>{
+      (x.parts||[]).length
+        ? x.parts.forEach(pt => addBatch(loc, x.itemId, pt.qty, pt.price, pt.expiry, pt.src || "повернення"))
+        : addBatch(loc, x.itemId, x.qty, 0, "", "повернення");
+      mergeDupes();
+      S.issues = S.issues.filter(y => y.id !== id);
+      log("Списання", `Скасовано видачу на підрозділ ${x.unit2||"—"}: ${x.item} — ${qty(x.qty)} ${x.itemUnit||"шт"} повернуто на склад ${LOCS[loc].name}`);
+      close(); toast("Повернуто на склад"); render();
+    }}]);
+}
+
+function exportIssues(loc){
+  const aoa = [["Дата","Препарат","Номенклатурний номер","Кількість","Одиниця","Підрозділ","Отримувач","Звання","Підстава","Видав"]];
+  issuesAt(loc).sort((a,b)=>a.at-b.at).forEach(x=>aoa.push([dstr(x.at), x.item, x.nomen||"", x.qty,
+    x.itemUnit||"шт", x.unit2||"", x.to||"", x.rank||"", x.note||"", x.by]));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Видано на підрозділи");
+  XLSX.writeFile(wb, "vydacha-pidrozdilam-" + ymd(today()) + ".xlsx");
+  log("Система", `Вивантажено журнал видач на підрозділи (${LOCS[loc].name})`);
+  toast("Файл сформовано");
 }
 
 /* ---------- одна позиція: додавання і редагування ---------- */
@@ -4302,7 +4477,8 @@ function rejectRxModal(id){
 }
 
 /* ---------- створення заявки підрозділом ---------- */
-function newReqModal(){
+function newReqModal(preId){
+  if(preId && typeof preId !== "string") preId = null;      // кнопка може передати подію
   const src = LOCS[S.role].supplier;
   const rows = stockRows(src);
   if(!rows.length){ return modal("Створення заявки", `<div class="empty"><strong>У ${LOCS[src].name} немає залишків</strong>Замовляти поки нічого.</div>`, [{t:"Закрити", f:close}]); }
@@ -4328,6 +4504,10 @@ function newReqModal(){
     [{t:"Скасувати", f:close},{t:"Подати заявку", cls:"primary", f:submit}]);
 
   attachPicker("req-find", "pick", rows);
+  if(preId){
+    const sel = $("#pick");
+    if([...sel.options].some(o => o.value === preId)){ sel.value = preId; sel.dispatchEvent(new Event("change")); }
+  }
 
   /* --- заявка з файлу --- */
   const info = document.getElementById("req-info");
