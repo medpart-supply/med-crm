@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 05.09.2026 · правка призначень";
+const BUILD = "збірка 09.09.2026 · скасування видачі";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -2047,6 +2047,59 @@ const DOC_FIELDS = [
   ["store","Умови зберігання"],
   ["note", "Примітки"]
 ];
+/* ---------- скасування виданого призначення ----------
+   Медикаменти повертаються на ті самі підрозділи й партії, з яких були списані. */
+const canUndo = r => ME.admin || S.role === "senior" ||
+  (r.by === ME.name) || (rxChain(r).includes(S.role) && (r.lines||[]).some(l => (l.from||[]).some(f => f.loc === S.role)));
+
+function undoRxModal(id){
+  const r = (S.rx||[]).find(x=>x.id===id);
+  if(!r) return;
+  if(!["issued","partial"].includes(r.status)) return toast("Скасувати можна лише видане призначення", true);
+  if(!canUndo(r)) return toast("Скасувати видачу може той, хто видавав, старша медсестра або завідувач аптеки", true);
+
+  const back = [];
+  r.lines.forEach(l => (l.from||[]).forEach(f => back.push({item:item(l.itemId), loc:f.loc, qty:f.qty, exact:!!(f.parts||[]).length})));
+  if(!back.length) return toast("У цьому призначенні немає виданих позицій", true);
+  const rough = back.some(b => !b.exact);
+
+  modal(`Скасування видачі — ${esc(r.no)}`, `
+    <p style="margin-top:0">Пацієнт: <b>${esc(r.patient)}</b>${patientLine(r)?" · "+esc(patientLine(r)):""}.
+      Видано ${r.closed?dtstr(r.closed):"—"}${r.by?", "+esc(r.by):""}.</p>
+    <p class="sub2">Медикаменти повернуться на залишки підрозділів, а призначення отримає стан «Скасовано».</p>
+    <div class="tw" style="max-height:240px"><table><thead><tr><th>Препарат</th><th class="num">Повернеться</th>
+      <th>Куди</th><th>Партії</th></tr></thead><tbody>
+      ${back.map(b=>`<tr><td>${esc(b.item.name)}</td>
+        <td class="num">${qty(b.qty)} ${esc(b.item.unit)}</td>
+        <td><span class="tag">${LOCS[b.loc].short}</span> ${LOCS[b.loc].name}</td>
+        <td class="sub2">${b.exact ? "з тими самими термінами" : "термін не збережено"}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${rough ? `<p class="sub2" style="color:var(--warn);margin-top:10px">Частину позицій було видано до того, як система почала запам'ятовувати партії — вони повернуться без терміну придатності, його доведеться вказати у вкладці «Аптека».</p>`:""}
+    <div class="field" style="margin-top:12px"><label>Підстава скасування</label>
+      <input type="text" id="un-why" placeholder="Наприклад: помилково видано, препарат повернуто"></div>`,
+    [{t:"Закрити", f:close},{t:"Скасувати видачу", cls:"danger", f:()=>{
+      const why = document.getElementById("un-why").value.trim() || "без пояснення";
+      const done = [];
+      r.lines.forEach(l => {
+        (l.from||[]).forEach(f => {
+          if((f.parts||[]).length){
+            f.parts.forEach(pt => addBatch(f.loc, l.itemId, pt.qty, pt.price, pt.expiry, pt.src || "повернення"));
+          }else{
+            addBatch(f.loc, l.itemId, f.qty, 0, "", "повернення за " + r.no);
+          }
+          done.push(`${item(l.itemId).name} — ${qty(f.qty)} ${item(l.itemId).unit} → ${LOCS[f.loc].short}`);
+        });
+        l.got = 0; delete l.from;
+      });
+      mergeDupes();
+      r.status = "cancelled";
+      r.closed = Date.now();
+      r.undo = {by:ME.name, at:Date.now(), why};
+      log("Списання", `Скасовано видачу за призначенням ${r.no} (пацієнт ${r.patient}): повернуто ${done.join("; ")}. Підстава: ${why}`, {rx:r.no});
+      close(); toast("Видачу скасовано, медикаменти повернуто"); render();
+    }}]);
+}
+
 /* ---------- нумерація документів ---------- */
 function numModal(){
   if(!ME.admin) return;
@@ -3375,7 +3428,7 @@ function viewReq(){
       <div class="card" style="margin-top:14px"><header><h3>Перелік</h3><span class="spacer"></span>
           <span class="eyebrow">${all.length}</span></header>
         ${all.length? `<div class="tw"><table><thead><tr><th>№</th><th>Дата</th><th>Пацієнт</th><th>Діагноз</th>
-          <th>Журнал</th><th>Призначив</th><th>Видано</th><th>Стан</th></tr></thead><tbody>
+          <th>Журнал</th><th>Призначив</th><th>Видано</th><th>Стан</th><th></th></tr></thead><tbody>
           ${all.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="mono sub2">${dstr(new Date(r.closed||r.created))}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
@@ -3385,12 +3438,15 @@ function viewReq(){
               : `<span class="sub2">${r.cat?esc(CAT_NAME(r.cat)):"—"}</span>`}</td>
             <td class="sub2">${esc(r.doctor)}</td>
             <td class="sub2">${r.lines.filter(l=>l.got>0).map(l=>esc(item(l.itemId).name)+" "+qty(l.got)).join("; ")||"—"}</td>
-            <td>${statusTag(r)}</td></tr>`).join("")}
+            <td>${statusTag(r)}</td>
+            <td style="text-align:right">${["issued","partial"].includes(r.status) && canUndo(r)
+              ? `<button class="btn sm danger" data-undo="${r.id}">Скасувати</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>За цей період записів немає</strong>Змініть межі або оберіть інший місяць.</div>`}
       </div>`;
 
     document.querySelectorAll("[data-mc]").forEach(b=>b.onclick=()=>{ flt.cat2 = b.dataset.mc; render(); });
     document.querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
+    document.querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>undoRxModal(b.dataset.undo));
     const bulk = document.getElementById("m-bulk");
     if(bulk) bulk.onclick = catBulkModal;
     document.getElementById("m-sel").onchange = e => {
@@ -3464,7 +3520,7 @@ function viewReq(){
       <div class="card" style="margin-bottom:14px"><header><h3>Історія рецептів</h3><span class="spacer"></span>
         <span class="eyebrow">${doneRx.length}</span></header>
         ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Призначив</th><th>Препарати</th>
-            <th>Журнал</th><th>Виписано</th><th>Закрито</th><th>Стан</th></tr></thead><tbody>
+            <th>Журнал</th><th>Виписано</th><th>Закрито</th><th>Стан</th><th></th></tr></thead><tbody>
           ${doneRx.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
             <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
@@ -3476,7 +3532,9 @@ function viewReq(){
             <td>${r.lines.map(l=>`${esc(item(l.itemId).name)} — ${qty(l.got||0)}/${qty(l.want)} ${esc(item(l.itemId).unit)}`
                   + (l.from&&l.from.length?` <span class="sub2 mono">(${esc(l.from.map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · "))})</span>`:"")).join("<br>")}</td>
             <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
-            <td>${statusTag(r)}</td>
+            <td>${statusTag(r)}${r.undo?`<div class="sub2">скасував ${esc(r.undo.by)}</div>`:""}</td>
+            <td style="text-align:right">${["issued","partial"].includes(r.status) && canUndo(r)
+              ? `<button class="btn sm danger" data-undo="${r.id}">Скасувати видачу</button>` : ""}</td>
 </tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>Виданих рецептів ще немає</strong>Тут з'являться виконані, частково виконані та відхилені рецепти.</div>`}
       </div>
@@ -3492,6 +3550,7 @@ function viewReq(){
       </div>`;
     $("#rbody").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>reqDetails(b.dataset.view));
     $("#rbody").querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
+    $("#rbody").querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>undoRxModal(b.dataset.undo));
   }
 }
 function statusTag(r){
@@ -3995,9 +4054,9 @@ function issueRxModal(id){
       const need = l.want - (l.got||0);
       const q = Math.min(vals[k], need, avail(loc, pt.itemId));
       if(q <= 0.0001) return;
-      takeFEFO(loc, pt.itemId, q);
+      const took = takeFEFO(loc, pt.itemId, q).taken;
       l.got = Math.round(((l.got||0) + q)*1000)/1000;
-      (l.from = l.from||[]).push({loc, qty:q});
+      (l.from = l.from||[]).push({loc, qty:q, parts:took.map(x=>({qty:x.qty, price:x.price, expiry:x.expiry, src:x.src}))});
       given.push(`${item(pt.itemId).name} — ${qty(q)} ${item(pt.itemId).unit}`);
     });
     if(!given.length){ close(); return toast("Нічого не видано", true); }
@@ -4210,11 +4269,13 @@ function reviewRxModal(id){
     const given = [];
     r.lines.forEach(l => {
       const plan = planTake(l.itemId, l.want, chain);
-      plan.forEach(pt => takeFEFO(pt.loc, l.itemId, pt.qty));
+      const took = {};
+      plan.forEach(pt => { took[pt.loc] = takeFEFO(pt.loc, l.itemId, pt.qty).taken; });
       const got = plan.reduce((s2,pt)=>s2+pt.qty, 0);
       if(got > 0.0001){
         l.got = got;
-        l.from = plan.map(pt => ({loc:pt.loc, qty:pt.qty}));
+        l.from = plan.map(pt => ({loc:pt.loc, qty:pt.qty,
+          parts:(took[pt.loc]||[]).map(x=>({qty:x.qty, price:x.price, expiry:x.expiry, src:x.src}))}));
         given.push(`${item(l.itemId).name} — ${qty(got)} ${item(l.itemId).unit} (${planLabel(plan)})`);
       }
     });
