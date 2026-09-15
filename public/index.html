@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 15.09.2026 · скасування накладних";
+const BUILD = "збірка 18.09.2026 · картка препарату";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -2004,7 +2004,7 @@ function viewApteka(){
           <td style="white-space:nowrap;text-align:right">
             <button class="btn sm ${i.doc && i.doc.ind ? "" : "danger"}" data-doc="${i.id}">Інструкція</button></td>
           ${canEditExp? `<td style="white-space:nowrap;text-align:right">
-            <button class="btn sm" data-inn="${i.id}">Класифікація</button>
+            <button class="btn sm" data-inn="${i.id}">Картка</button>
             ${bs.length? `<button class="btn sm" data-exp="${i.id}">Термін</button>`:""}</td>`:""}
           </tr>`}).join("")}
       </tbody></table></div>` : `<div class="empty"><strong>Каталог порожній</strong>Найменування додаються автоматично під час оприбуткування.</div>`}
@@ -2326,7 +2326,15 @@ function docEditModal(itemId){
 function innModal(itemId){
   if(!(ME.loc === "apteka" && ME.admin)) return toast("Каталог веде завідувач аптеки", true);
   const it = item(itemId);
-  modal(`Класифікація — ${esc(it.name)}`, `
+  modal(`Картка препарату — ${esc(it.name)}`, `
+    <div class="grid g2" style="margin-bottom:12px">
+      <div class="field" style="grid-column:1/-1"><label>Найменування</label>
+        <input type="text" id="i-name" value="${esc(it.name)}"></div>
+      <div class="field"><label>Номенклатурний номер</label>
+        <input type="text" id="i-nom" value="${esc(it.nomen||"")}"></div>
+      <div class="field"><label>Одиниця виміру</label>
+        <input type="text" id="i-unit" value="${esc(it.unit||"шт")}"></div>
+    </div>
     <div class="grid g2">
       <div class="field"><label>Діюча речовина</label>
         <input type="text" id="i-inn" value="${esc(it.inn||"")}" placeholder="${esc(guessINN(it.name))}"></div>
@@ -2341,10 +2349,22 @@ function innModal(itemId){
       Код можна звірити в довіднику <span class="mono">compendium.com.ua/uk/atc</span>.</p>
     <div id="i-alt" style="margin-top:10px">${analogHTML(itemId)}</div>`,
     [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      const nm = document.getElementById("i-name").value.trim();
+      if(!nm) return toast("Найменування не може бути порожнім", true);
+      const nom = document.getElementById("i-nom").value.trim();
+      const un = document.getElementById("i-unit").value.trim() || "шт";
+      /* не даємо створити дубль: така сама назва або номер уже є в каталозі */
+      const clash = S.items.find(x => x.id !== itemId &&
+        (x.name.trim().toLowerCase() === nm.toLowerCase() ||
+         (nom && (x.nomen||"").trim().toLowerCase() === nom.toLowerCase())));
+      if(clash) return toast(`Такі дані вже має позиція «${clash.name}»`, true);
       const v = document.getElementById("i-inn").value.trim();
       const a = atcNorm(document.getElementById("i-atc").value);
       if(a && !atcValid(a) && !atcGroup(a)) return toast("Код ATC не розпізнано — перевірте формат (напр. N02BE01)", true);
       const ch = [];
+      if(it.name !== nm) ch.push(`найменування: «${it.name}» → «${nm}»`);
+      if((it.nomen||"") !== nom) ch.push(`ном. номер: «${it.nomen||"—"}» → «${nom||"—"}»`);
+      if((it.unit||"") !== un) ch.push(`одиниця: «${it.unit||"—"}» → «${un}»`);
       if((it.inn||"") !== v) ch.push(`діюча речовина: «${it.inn||"не вказано"}» → «${v||"не вказано"}»`);
       if((it.atc||"") !== a) ch.push(`код ATC: «${it.atc||"не вказано"}» → «${a||"не вказано"}»`);
       const bars = document.getElementById("i-bar").value.split(",").map(x=>x.trim().replace(/^0+/,"")).filter(Boolean);
@@ -2354,7 +2374,8 @@ function innModal(itemId){
       bars.forEach(k => S.codes[k] = itemId);
       if(added.length) ch.push(`штрихкоди: ${added.join(", ")}`);
       if(!ch.length){ close(); return; }
-      log("Виправлення", `Класифікація «${it.name}»: ${ch.join("; ")}`);
+      log("Виправлення", `Картка препарату «${it.name}»: ${ch.join("; ")}`);
+      it.name = nm; it.nomen = nom; it.unit = un;
       it.inn = v; it.atc = a; close(); toast("Збережено"); render();
     }}]);
   document.getElementById("i-scan").onclick = ()=>scanModal("Штрихкод — " + it.name, raw=>{
