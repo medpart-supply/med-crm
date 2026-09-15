@@ -900,7 +900,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 15.09.2026 · імпорт видач";
+const BUILD = "збірка 15.09.2026 · скасування накладних";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -929,7 +929,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], contractors:{}, codes:{}, users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], contractors:{}, codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
@@ -951,7 +951,7 @@ function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
   if(!S.codes) S.codes = {};
   if(!S.contractors) S.contractors = {};
-  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","receipts","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
@@ -986,7 +986,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -1898,6 +1898,7 @@ function viewApteka(){
     act("Завантажити накладну", ()=>importModal()).classList.add("primary");
     act("Додати вручну", ()=>manualModal());
   }
+  if(S.role==="apteka" || ME.admin) act("Надходження", ()=>receiptsModal("apteka"));
   if(ME.admin) act("Підібрати коди ATC", atcBulkModal);
   act("Експорт залишків", exportStock);
 
@@ -1906,6 +1907,7 @@ function viewApteka(){
     <div class="seg">
       <button data-s="stock" class="${sub.apteka==="stock"?"on":""}">Залишки на складі</button>
       <button data-s="cat" class="${sub.apteka==="cat"?"on":""}">Каталог препаратів</button>
+      <button data-s="inv" class="${sub.apteka==="inv"?"on":""}">Надходження</button>
     </div>
     <input type="text" id="q" placeholder="Пошук за назвою або номенклатурним номером" style="max-width:340px" value="${esc(sub.apteka==="stock"?flt.stock:flt.cat)}">
   </div><div id="body"></div>`);
@@ -1914,7 +1916,7 @@ function viewApteka(){
 
   body();
   function body(){
-    sub.apteka==="stock" ? stockView() : catView();
+    sub.apteka==="stock" ? stockView() : sub.apteka==="inv" ? invView() : catView();
   }
 
   function stockView(){
@@ -1937,6 +1939,44 @@ function viewApteka(){
       </tbody></table></div>` : `<div class="empty"><strong>Склад порожній</strong>Завантажте накладну Excel, щоб оприбуткувати медикаменти.</div>`}
     </div>`;
     $("#body").querySelectorAll("[data-b]").forEach(b=>b.onclick=()=>batchModal("apteka", b.dataset.b));
+  }
+
+  /* перелік прибуткових накладних із можливістю скасувати */
+  function invView(){
+    const canUndoInv = ME.admin;
+    const q = flt.cat.trim().toLowerCase();
+    const list = (S.receipts||[]).slice().sort((a,b)=>b.at-a.at)
+      .filter(r => !q || r.no.toLowerCase().includes(q) ||
+        r.lines.some(l => item(l.itemId).name.toLowerCase().includes(q)));
+    $("#body").innerHTML = `<div class="card"><header><h3>Прибуткові накладні</h3>
+        <span class="spacer"></span><span class="eyebrow">${list.length} із ${(S.receipts||[]).length}</span></header>
+      ${list.length ? `<div class="tw" style="max-height:none"><table><thead><tr>
+        <th>Накладна</th><th>Дата</th><th>Куди</th><th class="num">Позицій</th><th class="num">Сума, грн</th>
+        <th>Стан</th><th>Оприбуткував</th>${canUndoInv?"<th></th>":""}</tr></thead><tbody>
+      ${list.map(r=>{
+        const sum = r.lines.reduce((a,l)=>a+l.qty*(l.price||0), 0);
+        const left = invLeft(r);
+        const state = r.undo ? `<span class="tag crit"><span class="dot"></span>Скасовано ${dstr(r.undo.at)}</span>`
+          : left.all ? `<span class="tag ok"><span class="dot"></span>На залишках</span>`
+          : left.some ? `<span class="tag warn"><span class="dot"></span>Частково витрачено</span>`
+          : `<span class="tag"><span class="dot"></span>Витрачено повністю</span>`;
+        return `<tr>
+          <td class="name">${esc(r.no)}${r.manual?`<div class="sub2">вручну</div>`:""}</td>
+          <td class="mono sub2">${dstr(r.at)}</td>
+          <td><span class="tag">${LOCS[r.loc]?LOCS[r.loc].short:"—"}</span></td>
+          <td class="num">${r.lines.length}</td>
+          <td class="num">${money(sum)}</td>
+          <td>${state}${r.undo?`<div class="sub2">${esc(r.undo.by)}</div>`:""}</td>
+          <td class="sub2">${esc(r.by||"—")}</td>
+          ${canUndoInv?`<td style="white-space:nowrap;text-align:right">
+            <button class="btn sm" data-inv="${r.id}">Деталі</button>
+            ${!r.undo && left.some ? `<button class="btn sm danger" data-invu="${r.id}">Скасувати</button>`:""}</td>`:""}
+        </tr>`}).join("")}
+      </tbody></table></div>` : `<div class="empty"><strong>${(S.receipts||[]).length ? "Нічого не знайдено" : "Надходжень ще не було"}</strong>${
+        (S.receipts||[]).length ? "Змініть пошуковий запит." : "Накладні з'являться тут після оприбуткування."}</div>`}
+    </div>`;
+    $("#body").querySelectorAll("[data-inv]").forEach(b=>b.onclick=()=>invDetails(b.dataset.inv));
+    $("#body").querySelectorAll("[data-invu]").forEach(b=>b.onclick=()=>invUndoModal(b.dataset.invu));
   }
 
   function catView(){
@@ -1973,6 +2013,84 @@ function viewApteka(){
     $("#body").querySelectorAll("[data-inn]").forEach(b=>b.onclick=()=>innModal(b.dataset.inn));
     $("#body").querySelectorAll("[data-doc]").forEach(b=>b.onclick=()=>docModal(b.dataset.doc));
   }
+}
+
+/* ---------- надходження за накладними ----------
+   Накладна — це група партій з однаковою підставою на одному складі. */
+function receipts(loc){
+  const m = new Map();
+  S.batches.forEach(b => {
+    if(loc && b.loc !== loc) return;
+    const src = (b.src || "").trim();
+    if(!src) return;
+    const key = b.loc + "|" + src;
+    if(!m.has(key)) m.set(key, {key, loc:b.loc, src, at:b.at || 0, qty:0, sum:0, items:new Set(), batches:[]});
+    const g = m.get(key);
+    g.qty += b.qty; g.sum += b.qty * (b.price || 0);
+    g.items.add(b.itemId); g.batches.push(b);
+    if((b.at || 0) < g.at || !g.at) g.at = b.at || g.at;
+  });
+  return [...m.values()].sort((a,b) => (b.at||0) - (a.at||0));
+}
+
+function receiptsModal(loc){
+  const canDo = ME.admin || S.role === loc;
+  const list = receipts(loc).filter(g => g.qty > 0.0001);
+  modal(`Надходження — ${LOCS[loc].name}`, `
+    <p class="sub2" style="margin-top:0">Партії згруповані за підставою надходження. Скасування вилучає зі складу те,
+      що ще не витрачено.</p>
+    ${list.length ? `<div class="tw" style="max-height:380px"><table><thead><tr>
+        <th>Підстава</th><th>Оприбутковано</th><th class="num">Позицій</th>
+        <th class="num">Залишилось</th><th class="num">Сума, грн</th>${canDo?"<th></th>":""}</tr></thead><tbody>
+      ${list.map(g=>`<tr>
+        <td class="name">${esc(g.src)}</td>
+        <td class="mono sub2">${g.at?dstr(g.at):"—"}</td>
+        <td class="num">${g.items.size}</td>
+        <td class="num">${qty(g.qty)}</td>
+        <td class="num">${money(g.sum)}</td>
+        ${canDo?`<td style="text-align:right"><button class="btn sm danger" data-rcv="${esc(g.key)}">Скасувати</button></td>`:""}
+      </tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty"><strong>Надходжень не знайдено</strong>Партії без зазначеної підстави тут не показуються.</div>`}`,
+    [{t:"Закрити", f:close}]);
+  document.querySelectorAll("[data-rcv]").forEach(b=>b.onclick=()=>undoReceiptModal(b.dataset.rcv, loc));
+}
+
+function undoReceiptModal(key, loc){
+  const g = receipts(loc).find(x => x.key === key);
+  if(!g) return toast("Надходження не знайдено", true);
+  if(!(ME.admin || S.role === loc)) return toast("Скасувати надходження може склад-одержувач або завідувач аптеки", true);
+
+  const rows = [];
+  const byItem = new Map();
+  g.batches.forEach(b => {
+    if(!byItem.has(b.itemId)) byItem.set(b.itemId, {it:item(b.itemId), qty:0, sum:0});
+    const r = byItem.get(b.itemId);
+    r.qty += b.qty; r.sum += b.qty * (b.price || 0);
+  });
+  byItem.forEach(r => rows.push(r));
+
+  modal(`Скасування надходження — ${esc(g.src)}`, `
+    <p style="margin-top:0">Склад: <b>${LOCS[g.loc].name}</b>${g.at?` · оприбутковано ${dstr(g.at)}`:""}.</p>
+    <p class="sub2">Буде вилучено залишок цих партій. Те, що вже видано або списано, не повертається —
+      система прибере лише наявне.</p>
+    <div class="tw" style="max-height:260px"><table><thead><tr><th>Препарат</th>
+      <th class="num">Буде вилучено</th><th class="num">Сума, грн</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td>${esc(r.it.name)}</td>
+        <td class="num">${qty(r.qty)} ${esc(r.it.unit)}</td>
+        <td class="num">${money(r.sum)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="field" style="margin-top:12px"><label>Підстава скасування</label>
+      <input type="text" id="rc-why" placeholder="Наприклад: накладну проведено помилково, дублювання"></div>`,
+    [{t:"Скасувати", f:()=>{ close(); receiptsModal(loc); }},
+     {t:"Вилучити зі складу", cls:"danger", f:()=>{
+       const why = document.getElementById("rc-why").value.trim() || "без пояснення";
+       const ids = new Set(g.batches.map(b => b.id));
+       const removed = [];
+       byItem.forEach((r, id) => removed.push(`${r.it.name} — ${qty(r.qty)} ${r.it.unit}`));
+       S.batches = S.batches.filter(b => !ids.has(b.id));
+       log("Списання", `Скасовано надходження «${g.src}» (${LOCS[g.loc].name}): вилучено ${removed.join("; ")}. Підстава: ${why}`);
+       close(); toast("Надходження скасовано"); render();
+     }}]);
 }
 
 /* ---------- масовий підбір кодів ATC ---------- */
@@ -2251,6 +2369,81 @@ function innModal(itemId){
   ia.oninput = ()=>{ document.getElementById("i-path").innerHTML = atcHTML(ia.value); };
 }
 
+/* ---------- скасування прибуткової накладної ----------
+   Знімаються лише ті залишки, які ще не витрачені. */
+function invLine(r, l){
+  /* скільки з цього рядка ще лежить на залишках тієї самої партії */
+  const b = S.batches.find(x => x.loc === r.loc && x.itemId === l.itemId
+    && (x.expiry||"") === (l.expiry||"") && Math.abs((x.price||0) - (l.price||0)) < 0.005);
+  return {batch:b, have: b ? b.qty : 0, take: Math.min(b ? b.qty : 0, l.qty)};
+}
+function invLeft(r){
+  if(r.undo) return {all:false, some:false};
+  let some = false, all = true;
+  r.lines.forEach(l => {
+    const x = invLine(r, l);
+    if(x.take > 0.0001) some = true;
+    if(x.take + 0.0001 < l.qty) all = false;
+  });
+  return {all, some};
+}
+
+function invDetails(id){
+  const r = (S.receipts||[]).find(x => x.id === id);
+  if(!r) return;
+  modal(`Накладна ${esc(r.no)}`, `
+    <div class="grid g3" style="margin-bottom:12px">
+      <div><div class="eyebrow">Дата</div><div class="mono">${dstr(r.at)}</div></div>
+      <div><div class="eyebrow">Підрозділ</div><div>${LOCS[r.loc]?LOCS[r.loc].name:"—"}</div></div>
+      <div><div class="eyebrow">Оприбуткував</div><div>${esc(r.by||"—")}</div></div>
+    </div>
+    ${r.undo?`<p class="sub2" style="color:var(--crit)">Скасовано ${dtstr(r.undo.at)}, ${esc(r.undo.by)}${r.undo.why?" — "+esc(r.undo.why):""}.</p>`:""}
+    <div class="tw" style="max-height:300px"><table><thead><tr><th>Препарат</th><th class="num">Надійшло</th>
+      <th class="num">Ціна</th><th>Придатний до</th><th class="num">Лишилось</th></tr></thead><tbody>
+      ${r.lines.map(l=>{const x = invLine(r, l); const it = item(l.itemId); return `<tr>
+        <td>${esc(it.name)}</td><td class="num">${qty(l.qty)} ${esc(it.unit)}</td>
+        <td class="num">${money(l.price)}</td><td class="mono">${l.expiry?dstr(l.expiry):"—"}</td>
+        <td class="num" style="color:${x.take>=l.qty?"var(--ok)":"var(--warn)"}">${qty(x.take)}</td></tr>`}).join("")}
+    </tbody></table></div>`,
+    [{t:"Закрити", f:close}]);
+}
+
+function invUndoModal(id){
+  const r = (S.receipts||[]).find(x => x.id === id);
+  if(!r) return;
+  if(!ME.admin) return toast("Накладні скасовує завідувач аптеки", true);
+  if(r.undo) return toast("Цю накладну вже скасовано", true);
+  const plan = r.lines.map(l => ({l, x: invLine(r, l), it: item(l.itemId)})).filter(p => p.x.take > 0.0001);
+  if(!plan.length) return toast("Надходження вже повністю витрачене — знімати нічого", true);
+  const partial = plan.some(p => p.x.take + 0.0001 < p.l.qty) || plan.length < r.lines.length;
+
+  modal(`Скасування накладної ${esc(r.no)}`, `
+    <p style="margin-top:0">Буде знято з залишків ${LOCS[r.loc].name} те, що ще не витрачено.</p>
+    <div class="tw" style="max-height:280px"><table><thead><tr><th>Препарат</th><th class="num">Надійшло</th>
+      <th class="num">Знімається</th><th>Придатний до</th></tr></thead><tbody>
+      ${plan.map(p=>`<tr><td>${esc(p.it.name)}</td>
+        <td class="num">${qty(p.l.qty)} ${esc(p.it.unit)}</td>
+        <td class="num" style="font-weight:600">${qty(p.x.take)}</td>
+        <td class="mono">${p.l.expiry?dstr(p.l.expiry):"—"}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${partial ? `<p class="sub2" style="color:var(--warn);margin-top:10px">Частину надходження вже витрачено — вона залишиться в обліку як видача. Знімається лише наявний залишок.</p>`:""}
+    <div class="field" style="margin-top:12px"><label>Підстава</label>
+      <input type="text" id="iv-why" placeholder="Наприклад: помилкове оприбуткування, дубль накладної"></div>`,
+    [{t:"Закрити", f:close},{t:"Скасувати накладну", cls:"danger", f:()=>{
+      const why = document.getElementById("iv-why").value.trim() || "без пояснення";
+      const done = [];
+      plan.forEach(p => {
+        p.x.batch.qty = Math.round((p.x.batch.qty - p.x.take)*1000)/1000;
+        done.push(`${p.it.name} — ${qty(p.x.take)} ${p.it.unit}`);
+      });
+      S.batches = S.batches.filter(b => b.qty > 0.0001);
+      r.undo = {by:ME.name, at:Date.now(), why};
+      log("Списання", `Скасовано прибуткову накладну ${r.no} (${LOCS[r.loc].name}): знято ${done.join("; ")}`
+        + (partial ? ". Частину вже було витрачено" : "") + `. Підстава: ${why}`, {inv:r.no});
+      close(); toast("Накладну скасовано"); render();
+    }}]);
+}
+
 /* ---------- виправлення термінів придатності (лише завідувач аптеки) ---------- */
 function expiryModal(itemId){
   if(!(ME.loc==="apteka" && ME.admin)) return toast("Термін придатності виправляє лише завідувач аптеки", true);
@@ -2445,7 +2638,13 @@ function importModal(fixed){
     $("#commit").onclick = ()=>{
       const inv = $("#invno").value.trim() || "без номера";
       const dest = fixed || ($("#invloc") ? $("#invloc").value : "apteka");
-      rows.forEach(r=>{ const it = findItem(r.name, r.nomen, r.unit); addBatch(dest, it.id, r.qty, r.price, r.exp, inv); });
+      const rec = {id:uid("rc"), no:inv, loc:dest, at:Date.now(), by:ME.name, lines:[]};
+      rows.forEach(r=>{
+        const it = findItem(r.name, r.nomen, r.unit);
+        addBatch(dest, it.id, r.qty, r.price, r.exp, inv);
+        rec.lines.push({itemId:it.id, qty:r.qty, price:r.price, expiry:r.exp});
+      });
+      (S.receipts = S.receipts || []).push(rec);
       S.inv = (S.inv||0)+1;
       log("Надходження", `${LOCS[dest].name}: за накладною ${inv} оприбутковано ${rows.length} позицій на суму ${money(sum)} грн`, {inv, count:rows.length, sum, loc:dest});
       close(); toast("Накладну оприбутковано: " + rows.length + " позицій"); render();
@@ -2599,7 +2798,10 @@ function manualModal(){
       if(atc) it.atc = atc;
     }
     const dest = el("m-loc") ? el("m-loc").value : "apteka";
-    addBatch(dest, it.id, q, parseFloat(el("m-price").value) || 0, el("m-exp").value, el("m-src").value.trim());
+    const price0 = parseFloat(el("m-price").value) || 0, exp0 = el("m-exp").value, src0 = el("m-src").value.trim();
+    addBatch(dest, it.id, q, price0, exp0, src0);
+    (S.receipts = S.receipts || []).push({id:uid("rc"), no:src0 || "Ручне оприбуткування", loc:dest,
+      at:Date.now(), by:ME.name, manual:true, lines:[{itemId:it.id, qty:q, price:price0, expiry:exp0}]});
     log("Надходження", `${LOCS[dest].name}: оприбутковано ${qty(q)} ${it.unit} «${it.name}»`
       + `${picked ? " (позиція вже була в каталозі)" : " (нова позиція)"}`
       + `${dest !== "apteka" ? " — внесено як залишок підрозділу" : ""}`);
@@ -2698,6 +2900,7 @@ function viewUnits(){
         <span class="eyebrow" style="margin-right:6px">${rows.length} позицій · ${qty(u.qty)} од. · ${money(u.sum)} грн</span>
         ${canEdit && LOCS[cur].supplier ? `<button class="btn sm primary" id="u-order">Замовити в ${LOCS[LOCS[cur].supplier].short}</button>`:""}
         ${canEdit? `<button class="btn sm" id="u-win">Оприбуткувати з Excel</button>
+                    <button class="btn sm" id="u-rcv">Надходження</button>
                     <button class="btn sm" id="u-woff">Списати по накладній</button>`:""}</header>
       ${rows.length ? `<div class="tw"><table><thead><tr>
           <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th>
@@ -2725,6 +2928,7 @@ function viewUnits(){
     if(canEdit && document.getElementById("u-woff")) document.getElementById("u-woff").onclick = ()=>writeOffImportModal(cur);
     if(canEdit && document.getElementById("u-win")) document.getElementById("u-win").onclick = ()=>importModal(cur);
     if(canEdit && document.getElementById("u-order")) document.getElementById("u-order").onclick = ()=>newReqModal();
+    if(canEdit && document.getElementById("u-rcv")) document.getElementById("u-rcv").onclick = ()=>receiptsModal(cur);
     bindAssets(cur, canEdit);
     $("#ubody").querySelectorAll("[data-ord]").forEach(b=>b.onclick=()=>newReqModal(b.dataset.ord));
   }
