@@ -900,12 +900,12 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 22.09.2026 · ціни в акті";
+const BUILD = "збірка 25.09.2026 · бланк акта";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
 let sub = {apteka:"stock", req:"pending", units:"senior", feld:"stock", terms:"mine", jour:"temp", jourF:"out"};
-let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all", aFrom:"", aTo:"", aKind:"cito"};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all", aFrom:"", aTo:"", aKind:"cito", aNo:""};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
@@ -951,6 +951,20 @@ function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
   if(!S.codes) S.codes = {};
   if(!S.contractors) S.contractors = {};
+  if(!S.act) S.act = {
+    unit:"Київського інституту Національної гвардії України",
+    appPost:"Начальник Київського інституту Національної гвардії України",
+    appRank:"полковник", appName:"",
+    order:"29.12.2025 року № 822",
+    chairPost:"Заступника начальника інституту з тилу – начальника відділу тилового забезпечення",
+    chairRank:"полковник", chairName:"",
+    members:[{post:"Заступник начальника фінансового відділу", rank:"підполковник", name:""},
+             {post:"Начальник медичної служби", rank:"підполковник медичної служби", name:""},
+             {post:"Начальник квартирно-експлуатаційної служби", rank:"підполковник", name:""}],
+    matPost:"Т.в.о офіцера начальника аптеки", matName:"",
+    conclusion:"Комісія, перевіривши ведення документації медичної частини, встановила, що зазначене в акті майно було використано за призначенням і підлягає списанню.",
+    account:"", corr:""
+  };
   ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","receipts","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
@@ -2218,6 +2232,123 @@ function undoRxModal(id){
       close(); toast("Видачу скасовано, медикаменти повернуто"); render();
     }}]);
 }
+
+/* ---------- реквізити бланка акта ---------- */
+function actSetupModal(){
+  if(!ME.admin) return;
+  const a = S.act || {};
+  const M = a.members || [];
+  modal("Бланк акта списання", `
+    <p class="sub2" style="margin-top:0">Дані підставляються у форму «Додаток 4 до Порядку списання військового майна в Національній гвардії України».</p>
+    <div class="field" style="margin-bottom:11px"><label>Військова частина (у родовому відмінку)</label>
+      <input type="text" id="ac-unit" value="${esc(a.unit||"")}" placeholder="Київського інституту Національної гвардії України"></div>
+    <div class="field" style="margin-bottom:11px"><label>Наказ про утворення комісії</label>
+      <input type="text" id="ac-order" value="${esc(a.order||"")}" placeholder="29.12.2025 року № 822"></div>
+    <div class="eyebrow" style="margin:14px 0 6px">Затверджує</div>
+    <div class="grid g3">
+      <div class="field" style="grid-column:1/-1"><label>Посада</label>
+        <input type="text" id="ac-app-post" value="${esc(a.appPost||"")}"></div>
+      <div class="field"><label>Звання</label><input type="text" id="ac-app-rank" value="${esc(a.appRank||"")}"></div>
+      <div class="field" style="grid-column:2/-1"><label>Ім'я та прізвище</label>
+        <input type="text" id="ac-app-name" value="${esc(a.appName||"")}" placeholder="Андрій МАРТИНЮК"></div>
+    </div>
+    <div class="eyebrow" style="margin:14px 0 6px">Голова комісії</div>
+    <div class="grid g3">
+      <div class="field" style="grid-column:1/-1"><label>Посада</label>
+        <input type="text" id="ac-ch-post" value="${esc(a.chairPost||"")}"></div>
+      <div class="field"><label>Звання</label><input type="text" id="ac-ch-rank" value="${esc(a.chairRank||"")}"></div>
+      <div class="field" style="grid-column:2/-1"><label>Ім'я та прізвище</label>
+        <input type="text" id="ac-ch-name" value="${esc(a.chairName||"")}"></div>
+    </div>
+    <div class="eyebrow" style="margin:14px 0 6px">Члени комісії</div>
+    ${[0,1,2].map(i=>`<div class="grid g3" style="margin-bottom:8px">
+      <div class="field" style="grid-column:1/-1"><label>Посада ${i+1}</label>
+        <input type="text" id="ac-m${i}-post" value="${esc((M[i]||{}).post||"")}"></div>
+      <div class="field"><label>Звання</label><input type="text" id="ac-m${i}-rank" value="${esc((M[i]||{}).rank||"")}"></div>
+      <div class="field" style="grid-column:2/-1"><label>Ім'я та прізвище</label>
+        <input type="text" id="ac-m${i}-name" value="${esc((M[i]||{}).name||"")}"></div>
+    </div>`).join("")}
+    <div class="eyebrow" style="margin:14px 0 6px">Матеріально відповідальна особа</div>
+    <div class="grid g2">
+      <div class="field"><label>Посада</label><input type="text" id="ac-mat-post" value="${esc(a.matPost||"")}"></div>
+      <div class="field"><label>Ім'я та прізвище</label><input type="text" id="ac-mat-name" value="${esc(a.matName||"")}"></div>
+    </div>
+    <div class="grid g2" style="margin-top:11px">
+      <div class="field"><label>Основний рахунок</label><input type="text" id="ac-acc" value="${esc(a.account||"")}"></div>
+      <div class="field"><label>Кореспондентський рахунок</label><input type="text" id="ac-corr" value="${esc(a.corr||"")}"></div>
+    </div>
+    <div class="field" style="margin-top:11px"><label>Висновок та пропозиції комісії</label>
+      <textarea id="ac-concl" style="min-height:70px">${esc(a.conclusion||"")}</textarea></div>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      const v = id2 => (document.getElementById(id2).value || "").trim();
+      S.act = {
+        unit:v("ac-unit"), order:v("ac-order"),
+        appPost:v("ac-app-post"), appRank:v("ac-app-rank"), appName:v("ac-app-name"),
+        chairPost:v("ac-ch-post"), chairRank:v("ac-ch-rank"), chairName:v("ac-ch-name"),
+        members:[0,1,2].map(i=>({post:v(`ac-m${i}-post`), rank:v(`ac-m${i}-rank`), name:v(`ac-m${i}-name`)}))
+          .filter(m=>m.post||m.name),
+        matPost:v("ac-mat-post"), matName:v("ac-mat-name"),
+        account:v("ac-acc"), corr:v("ac-corr"), conclusion:v("ac-concl")
+      };
+      log("Система", "Оновлено реквізити бланка акта списання");
+      close(); toast("Збережено"); render();
+    }}]);
+}
+
+/* ---------- число прописом (для акта списання) ---------- */
+const W_ONES = [["","один","два","три","чотири","п'ять","шість","сім","вісім","дев'ять"],
+                ["","одна","дві","три","чотири","п'ять","шість","сім","вісім","дев'ять"]];
+const W_TEEN = ["десять","одинадцять","дванадцять","тринадцять","чотирнадцять","п'ятнадцять",
+                "шістнадцять","сімнадцять","вісімнадцять","дев'ятнадцять"];
+const W_TENS = ["","","двадцять","тридцять","сорок","п'ятдесят","шістдесят","сімдесят","вісімдесят","дев'яносто"];
+const W_HUND = ["","сто","двісті","триста","чотириста","п'ятсот","шістсот","сімсот","вісімсот","дев'ятсот"];
+const W_FORMS = [
+  ["тисяча","тисячі","тисяч", 1],
+  ["мільйон","мільйони","мільйонів", 0],
+  ["мільярд","мільярди","мільярдів", 0]
+];
+function plural(n, one, few, many){
+  const n10 = n % 10, n100 = n % 100;
+  if(n10 === 1 && n100 !== 11) return one;
+  if(n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return few;
+  return many;
+}
+function group3(n, female){
+  const out = [];
+  const h = Math.floor(n/100), t = Math.floor((n%100)/10), u = n%10;
+  if(h) out.push(W_HUND[h]);
+  if(t === 1) out.push(W_TEEN[u]);
+  else { if(t) out.push(W_TENS[t]); if(u) out.push(W_ONES[female?1:0][u]); }
+  return out.join(" ");
+}
+function numWords(n, female){
+  n = Math.floor(Math.abs(n));
+  if(n === 0) return "нуль";
+  const parts = [];
+  const groups = [];
+  let x = n;
+  while(x > 0){ groups.push(x % 1000); x = Math.floor(x/1000); }
+  for(let i = groups.length - 1; i >= 0; i--){
+    const g = groups[i];
+    if(!g) continue;
+    if(i === 0){ parts.push(group3(g, female)); }
+    else {
+      const f = W_FORMS[i-1];
+      parts.push(group3(g, !!f[3]));
+      parts.push(plural(g, f[0], f[1], f[2]));
+    }
+  }
+  return parts.filter(Boolean).join(" ");
+}
+/* «сорок три тисячі триста сімнадцять гривень, сімдесят шість копійок» */
+function moneyWords(v){
+  const total = Math.round(Math.abs(v) * 100);
+  const grn = Math.floor(total / 100), kop = total % 100;
+  const g = numWords(grn, true) + " " + plural(grn, "гривня", "гривні", "гривень");
+  const k = (kop < 10 ? "0" + kop : String(kop)) + " " + plural(kop, "копійка", "копійки", "копійок");
+  return g + ", " + k;
+}
+const capFirst = t => t ? t[0].toUpperCase() + t.slice(1) : t;
 
 /* ---------- нумерація документів ---------- */
 function numModal(){
@@ -4164,6 +4295,8 @@ function viewReq(){
             <option value="cito" ${onlyCito?"selected":""}>Рецепти Cito!</option>
             <option value="all" ${!onlyCito?"selected":""}>Усі призначення та рецепти</option>
           </select></div>
+        <div class="field" style="width:130px"><label>Акт №</label>
+          <input type="text" id="a-no" value="${esc(flt.aNo||"")}" placeholder="12"></div>
         <button class="btn primary" id="a-exp" style="height:37px">Вивантажити акт</button>
       </div>
 
@@ -4216,27 +4349,62 @@ function viewReq(){
       el.onchange = onDate; el.oninput = onDate;
     });
     document.getElementById("a-kind").onchange = e => { flt.aKind = e.target.value; render(); };
+    document.getElementById("a-no").oninput = e => { flt.aNo = e.target.value.trim(); };
     document.getElementById("a-exp").onclick = ()=>{
       if(!rows.length) return toast("За цей період списань немає", true);
-      const g = S.org || {};
-      const head = [
-        [g.name || "Медична частина"],
-        [g.addr || ""],
-        ["АКТ СПИСАННЯ МЕДИКАМЕНТІВ"],
-        ["за період", label],
-        ["підстава", onlyCito ? "рецепти Cito!" : "призначення та рецепти"],
-        [],
-        ["№","Номенклатурний номер","Найменування","Одиниця виміру","Кількість","Ціна за одиницю","Сума, грн","Накладна","Документи"]
-      ];
-      rows.forEach((x,i)=>head.push([i+1, x.it.nomen||"", x.it.name, x.it.unit, x.qty,
-        x.price == null ? "" : x.price, x.price == null ? "" : Math.round(x.qty*x.price*100)/100,
-        x.src || "", [...x.docs].join(", ")]));
-      head.push([], ["", "", "", "", "", "Разом", Math.round(total*100)/100, "", ""]);
-      head.push([], ["Склав", "", "", "", "", "", "", "", ""], ["Перевірив", "", "", "", "", "", "", "", ""]);
+      const a = S.act || {}, g = S.org || {};
+      const qtyTotal = rows.reduce((s2,x)=>s2+x.qty, 0);
+      const W = 24;                                   // ширина бланка, як у зразку
+      const L = (arr)=>{ const r2 = new Array(W).fill(""); arr.forEach(([c,v])=>{ r2[c] = v; }); return r2; };
+      const out = [];
+
+      out.push(L([[12,"Додаток 4\nдо Порядку списання військового майна в Національній гвардії України  (пункт 5 розділу І)"]]));
+      out.push(L([]));
+      out.push(L([[0,"Номенклатурний номер"],[2,"Основний рахунок"],[4,"Кореспондентський рахунок"],[10,"ЗАТВЕРДЖУЮ"]]));
+      out.push(L([[2,a.account||""],[4,a.corr||""],[10,a.appPost||""]]));
+      out.push(L([[10,a.appRank||""]]));
+      out.push(L([[10,a.appName||""]]));
+      out.push(L([]));
+      out.push(L([[10,"____.____." + new Date().getFullYear()]]));
+      out.push(L([]));
+      out.push(L([[0,"Акт списання № " + (flt.aNo || "____")]]));
+      out.push(L([[0,`Комісія, утворена наказом начальника військової частини  від ${a.order||"____"}, провела перевірку матеріальних цінностей та встановила, що нижчезазначені матеріальні цінності підлягають списанню.`]]));
+      out.push(L([]));
+      out.push(L([[0,"Списання"],[12,"Оприбуткування"],[23,"Примітки"]]));
+      out.push(L([[0,"№ з\\п"],[1,"Номенклатурний \nномер"],[3,"Назва та опис \n(марка, ґатунок, \nінші характерні відомості)"],
+        [6,"Одиниця виміру"],[7,"кількість"],[8,"Ціна за одиницю"],[9,"сума, грн."],[11,"Строк перебування в експлуатації"]]));
+      out.push(L([[0,1],[1,2],[3,3],[6,4],[7,5],[8,6],[9,7],[11,8],[12,9],[16,10],[18,11],[20,12],[22,13],[23,14]]));
+
+      rows.forEach((x,i)=>{
+        out.push(L([[0,i+1],[1,x.it.nomen||""],[3,x.it.name],[6,x.it.unit],
+          [7,x.qty],[8,x.price == null ? "" : x.price],
+          [9,x.price == null ? "" : Math.round(x.qty*x.price*100)/100],
+          [23,[...x.docs].join(", ")]]));
+      });
+      out.push(L([[0,"УСЬОГО :"],[7,Math.round(qtyTotal*1000)/1000],[9,Math.round(total*100)/100]]));
+      out.push(L([]));
+      out.push(L([[0,"Висновок та пропозиції комісії:"],[2,a.conclusion||""]]));
+      out.push(L([[0,"Усього за цим актом списано"],[2,numWords(qtyTotal, false)]]));
+      out.push(L([[2,"(кількість (словами))"]]));
+      out.push(L([[0,"предметів на загальну суму"],[2,capFirst(moneyWords(total))]]));
+      out.push(L([[2,"(словами)"]]));
+      out.push(L([]));
+      out.push(L([[0,"Голова комісії: " + (a.chairPost||"")]]));
+      out.push(L([[1,a.chairRank||""],[13,a.chairName||""]]));
+      (a.members||[]).forEach((m,i)=>{
+        out.push(L([[i===0?0:1, (i===0?"Члени комісії: ":"") + (m.post||"")]]));
+        out.push(L([[1,m.rank||""],[13,m.name||""]]));
+      });
+      out.push(L([[0,"Матеріально відповідальна особа:"],[4,a.matPost||""]]));
+      out.push(L([[13,a.matName||""]]));
+
+      const ws = XLSX.utils.aoa_to_sheet(out);
+      ws["!cols"] = [{wch:6},{wch:18},{wch:4},{wch:30},{wch:6},{wch:6},{wch:12},{wch:10},{wch:14},{wch:13}]
+        .concat(new Array(14).fill({wch:8}));
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(head), "Акт списання");
-      XLSX.writeFile(wb, "akt-spysannya-" + flt.aFrom + "_" + flt.aTo + ".xlsx");
-      log("Система", `Сформовано акт списання за ${label}: ${rows.length} рядків на суму ${money(total)} грн`);
+      XLSX.utils.book_append_sheet(wb, ws, "Акт списання");
+      XLSX.writeFile(wb, "akt-spysannya-" + flt.aFrom + "_" + flt.aTo + ".xls");
+      log("Система", `Сформовано акт списання за ${label}: ${rows.length} рядків, ${qty(qtyTotal)} од. на суму ${money(total)} грн`);
       toast("Акт сформовано");
     };
   }
@@ -5688,6 +5856,7 @@ function viewHist(){
     XLSX.writeFile(wb, "zhurnal-" + new Date().toISOString().slice(0,10) + ".xlsx");
     toast("Журнал вивантажено");
   });
+  if(ME.admin) act("Бланк акта списання", actSetupModal);
   if(ME.admin) act("Нумерація документів", numModal);
   if(ME.admin) act("Очищення даних", ()=>{
     const opts = [
