@@ -25,6 +25,7 @@
   --accent:#14624F;
   --accent-soft:#DCEAE3;
   --ok:#2E6F4E;
+  --ok-soft:#E7F2EA;
   --warn:#9A6B0E;
   --warn-soft:#F6EBD2;
   --crit:#9E2430;
@@ -185,6 +186,9 @@ textarea{resize:vertical;min-height:60px}
 .tick{cursor:pointer}
 .tick rect{transition:.12s}
 .tick:hover rect{stroke:var(--ink);stroke-width:1.2}
+
+tr.fresh > td{background:var(--ok-soft)}
+tr.fresh:hover > td{background:#DBEDE2}
 
 /* ---------- календар донесень ---------- */
 .tdaily{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface-2)}
@@ -900,7 +904,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 29.09.2026 · нагороди";
+const BUILD = "збірка 02.10.2026 · нові надходження";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -1244,10 +1248,26 @@ function mergeDupes(){
 
 function addBatch(loc, itemId, q, price, expiry, src){
   const same = S.batches.find(b => b.loc===loc && b.itemId===itemId && (b.expiry||"")===(expiry||"") && Math.abs((b.price||0)-(price||0))<0.005);
-  if(same){ same.qty += q; return same; }
+  if(same){ same.qty += q; same.at = Date.now(); return same; }
   const b = {id:uid("b"), loc, itemId, qty:q, price:price||0, expiry:expiry||"", src:src||"", at:Date.now()};
   S.batches.push(b); return b;
 }
+/* Нове надходження: партії, оприбутковані за останні сім днів.
+   Потрібно старшій медсестрі й лікарям, щоб бачити, що з'явилося в аптеці. */
+const FRESH_DAYS = 7;
+const isFresh = b => b && b.at && (Date.now() - b.at) < FRESH_DAYS*86400000;
+const freshAt = (loc, itemId) => {
+  const b = S.batches.filter(x => x.loc === loc && x.itemId === itemId && x.qty > 0.0001 && isFresh(x))
+    .sort((a,b2)=>b2.at-a.at)[0];
+  return b ? b.at : 0;
+};
+const freshDays = ts => Math.max(0, Math.floor((Date.now() - ts)/86400000));
+const freshLabel = ts => { const d = freshDays(ts); return d === 0 ? "сьогодні" : d === 1 ? "учора" : d + " дн. тому"; };
+function freshTag(loc, itemId){
+  const ts = freshAt(loc, itemId);
+  return ts ? `<span class="tag ok" title="Надійшло ${dtstr(ts)}"><span class="dot"></span>нове · ${freshLabel(ts)}</span>` : "";
+}
+
 /* FEFO: спершу те, що швидше спливає */
 function takeFEFO(loc, itemId, need){
   const src = atLoc(loc).filter(b=>b.itemId===itemId)
@@ -1943,8 +1963,8 @@ function viewApteka(){
       <span class="spacer"></span><span class="eyebrow">${rows.length} позицій · ${money(total)} грн</span></header>
       ${rows.length? `<div class="tw"><table><thead><tr>
         <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th><th class="num">Ціна, грн</th><th class="num">Сума, грн</th><th>Найближчий термін</th><th>Партії</th></tr></thead><tbody>
-        ${rows.map(r=>{const s=shelf(r.nearest); return `<tr>
-          <td class="name">${esc(r.item.name)}</td>
+        ${rows.map(r=>{const s=shelf(r.nearest); const fr=freshAt("apteka", r.itemId); return `<tr${fr?' class="fresh"':''}>
+          <td class="name">${esc(r.item.name)} ${freshTag("apteka", r.itemId)}</td>
           <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
           <td>${esc(r.item.unit)}</td>
           <td class="num" style="font-weight:600">${qty(r.qty)}</td>
@@ -3059,8 +3079,8 @@ function viewUnits(){
       ${rows.length ? `<div class="tw"><table><thead><tr>
           <th>Препарат</th><th>Ном. номер</th><th>Од.</th><th class="num">Кількість</th>
           <th>Партії та терміни придатності</th><th class="num">Сума, грн</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
-        ${rows.map(r=>`<tr>
-          <td class="name">${esc(r.item.name)}</td>
+        ${rows.map(r=>{const fr=freshAt(cur, r.itemId); return `<tr${fr?' class="fresh"':''}>
+          <td class="name">${esc(r.item.name)} ${freshTag(cur, r.itemId)}</td>
           <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
           <td>${esc(r.item.unit)}</td>
           <td class="num" style="font-weight:600">${qty(r.qty)}</td>
@@ -3072,7 +3092,7 @@ function viewUnits(){
           ${canEdit?`<td style="white-space:nowrap;text-align:right">
             ${cur==="feldsher"?`<button class="btn sm" data-give="${r.itemId}">Видати</button>`:""}
             <button class="btn sm" data-off="${r.itemId}">Списати</button></td>`:""}
-        </tr>`).join("")}
+        </tr>`}).join("")}
       </tbody></table></div>` : `<div class="empty"><strong>У підрозділі немає залишків</strong>${
         LOCS[cur].supplier ? "Медикаменти надходять сюди за заявкою до "+LOCS[LOCS[cur].supplier].name+"." : ""}</div>`}
     </div>
@@ -3099,8 +3119,9 @@ function viewUnits(){
       ${rows2.length ? `<div class="tw" style="max-height:340px"><table><thead><tr>
         <th>Препарат</th><th>Ном. номер</th><th class="num">На складі</th><th class="num">У мене</th>
         <th>Найближчий термін</th>${canEdit?"<th></th>":""}</tr></thead><tbody>
-        ${rows2.map(r=>{const sh=shelf(r.nearest); const have=mine.get(r.itemId)||0; return `<tr>
-          <td class="name">${esc(r.item.name)}</td>
+        ${rows2.map(r=>{const sh=shelf(r.nearest); const have=mine.get(r.itemId)||0;
+          const fr=freshAt(src, r.itemId); return `<tr${fr?' class="fresh"':''}>
+          <td class="name">${esc(r.item.name)} ${freshTag(src, r.itemId)}</td>
           <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
           <td class="num">${qty(r.qty)} ${esc(r.item.unit)}</td>
           <td class="num" style="color:${have?"var(--ok)":"var(--faint)"}">${have?qty(have):"—"}</td>
