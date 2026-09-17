@@ -900,12 +900,12 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 25.09.2026 · бланк акта";
+const BUILD = "збірка 29.09.2026 · нагороди";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
 let sub = {apteka:"stock", req:"pending", units:"senior", feld:"stock", terms:"mine", jour:"temp", jourF:"out"};
-let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all", aFrom:"", aTo:"", aKind:"cito", aNo:""};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all", aFrom:"", aTo:"", aKind:"cito", aNo:"", aw:""};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
@@ -929,7 +929,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], contractors:{}, codes:{}, users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], awards:[], contractors:{}, codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
@@ -965,7 +965,7 @@ function migrate(){
     conclusion:"Комісія, перевіривши ведення документації медичної частини, встановила, що зазначене в акті майно було використано за призначенням і підлягає списанню.",
     account:"", corr:""
   };
-  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","receipts","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","receipts","awards","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
@@ -1000,7 +1000,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","awards","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -1684,6 +1684,7 @@ const TABS = [
   {id:"req",    n:"Запити"},
   {id:"terms",  n:"Терміни виконання"},
   {id:"jour",   n:"Журнали"},
+  {id:"awards", n:"Нагороди"},
   {id:"hist",   n:"Історія"}
 ];
 const TITLES = {
@@ -1691,6 +1692,7 @@ const TITLES = {
   apteka:["Аптека","Основний склад: партії на залишках і каталог препаратів"],
   units:["Філії","Медикаменти на руках у підрозділів: кількість, партії та терміни придатності"],
   jour:["Журнали","Книги обліку медичної частини"],
+  awards:["Нагороди","Подяки, грамоти та відзнаки особового складу"],
   terms:["Терміни виконання","Періодичні донесення та звіти: періодичність, підстава, стан виконання"],
   req:["Запити","Заявки та рецепти підрозділів, історія їх виконання"],
   hist:["Історія","Повний журнал маніпуляцій у системі"]
@@ -1748,7 +1750,7 @@ function render(){
   $("#actions").innerHTML = "";
   $("#view").innerHTML = "";
 
-  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, terms:viewTerms, jour:viewJour, hist:viewHist})[tab]();
+  ({dash:viewDash, apteka:viewApteka, units:viewUnits, req:viewReq, terms:viewTerms, jour:viewJour, awards:viewAwards, hist:viewHist})[tab]();
   save();
 }
 
@@ -5620,6 +5622,234 @@ function exportTemp(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Видача МЦ");
   XLSX.writeFile(wb, "kniga-vydachi-mc-" + ymd(today()) + ".xlsx");
   log("Система", "Вивантажено книгу видачі МЦ у тимчасове використання");
+  toast("Файл сформовано");
+}
+
+/* =========== ВКЛАДКА: НАГОРОДИ =========== */
+/* Скани зберігаються окремими ключами сховища, а не в спільній базі:
+   інакше кожне збереження пересилало б мегабайти всім підрозділам. */
+const FILE_KEY = id => "medcrm:file:" + id;
+const AWARD_KINDS = ["Подяка","Грамота","Почесна грамота","Відзнака","Медаль","Нагрудний знак","Цінний подарунок","Інше"];
+
+async function fileSave(id, dataUrl){ await storage.set(FILE_KEY(id), dataUrl); }
+async function fileLoad(id){ try{ const r = await storage.get(FILE_KEY(id)); return r ? r.value : null; }catch(e){ return null; } }
+async function fileDel(id){ try{ await storage.delete(FILE_KEY(id)); }catch(e){} }
+
+/* зменшуємо скан, щоб не роздувати сховище */
+function shrinkImage(file, maxSide, quality){
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onerror = ()=>rej(new Error("не вдалося прочитати файл"));
+    fr.onload = ()=>{
+      if(!/^image\//.test(file.type)) return res({data:fr.result, w:0, h:0});
+      const img = new Image();
+      let settled = false;
+      const asIs = ()=>{ if(!settled){ settled = true; res({data:fr.result, w:0, h:0}); } };
+      /* якщо браузер не зміг відкрити зображення — зберігаємо оригінал, а не відмовляємо */
+      img.onerror = asIs;
+      setTimeout(asIs, 4000);
+      img.onload = ()=>{
+        if(settled) return;
+        settled = true;
+        const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const w = Math.round(img.width * k), h = Math.round(img.height * k);
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        try{ res({data:c.toDataURL("image/jpeg", quality), w, h}); }
+        catch(e){ res({data:fr.result, w:0, h:0}); }
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+function viewAwards(){
+  const canEdit = ME.admin || S.role === "apteka";
+  const q = flt.aw.trim().toLowerCase();
+  const all = (S.awards||[]).slice().sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.at - a.at);
+  const rows = all.filter(a => !q || a.name.toLowerCase().includes(q)
+    || (a.kind||"").toLowerCase().includes(q) || (a.title||"").toLowerCase().includes(q));
+  const year = String(today().getFullYear());
+  const byKind = new Map();
+  all.forEach(a => byKind.set(a.kind || "Інше", (byKind.get(a.kind || "Інше") || 0) + 1));
+
+  if(canEdit) act("Додати нагороду", ()=>awardModal(null)).classList.add("primary");
+  act("Експорт переліку", exportAwards);
+
+  const v = $("#view");
+  v.insertAdjacentHTML("beforeend", `
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="stat acc"><div class="eyebrow">Усього записів</div><div class="v">${all.length}</div>
+        <div class="n">${new Set(all.map(a=>a.name.trim().toLowerCase())).size} осіб</div></div>
+      <div class="stat ok"><div class="eyebrow">За ${year} рік</div>
+        <div class="v">${all.filter(a=>(a.date||"").startsWith(year)).length}</div><div class="n">нагороджень</div></div>
+      <div class="stat"><div class="eyebrow">Зі сканами</div><div class="v">${all.filter(a=>a.file).length}</div>
+        <div class="n">із ${all.length}</div></div>
+      <div class="stat"><div class="eyebrow">Видів</div><div class="v">${byKind.size}</div>
+        <div class="n">${[...byKind.keys()].slice(0,2).join(", ") || "—"}</div></div>
+    </div>
+    <div class="row" style="margin-bottom:14px">
+      <input type="text" id="aw-q" placeholder="пошук за прізвищем, видом або назвою" value="${esc(flt.aw)}" style="flex:1">
+    </div>
+    <div id="awbody"></div>`);
+  const qi = document.getElementById("aw-q");
+  qi.oninput = e => { flt.aw = e.target.value; clearTimeout(window.__awT);
+    window.__awT = setTimeout(()=>{ const p = qi.selectionStart; render();
+      const n2 = document.getElementById("aw-q"); if(n2){ n2.focus(); n2.setSelectionRange(p, p); } }, 250); };
+
+  $("#awbody").innerHTML = rows.length ? `<div class="card">
+      <header><h3>Нагороди та відзнаки</h3><span class="spacer"></span>
+        <span class="eyebrow">${rows.length} із ${all.length}</span></header>
+      <div class="tw" style="max-height:none"><table><thead><tr>
+        <th>Скан</th><th>Прізвище, ім'я, по батькові</th><th>Вид</th><th>Назва, за що</th>
+        <th>Дата</th><th>Ким нагороджено</th><th></th></tr></thead><tbody>
+      ${rows.map(a=>`<tr>
+        <td>${a.file
+          ? `<button class="btn sm" data-awv="${a.id}">Переглянути</button>`
+          : `<span class="sub2">немає</span>`}</td>
+        <td class="name">${esc(a.name)}${a.rank?`<div class="sub2">${esc(a.rank)}</div>`:""}</td>
+        <td><span class="tag acc">${esc(a.kind || "—")}</span></td>
+        <td>${esc(a.title || "—")}${a.note?`<div class="sub2">${esc(a.note)}</div>`:""}</td>
+        <td class="mono">${a.date ? dstr(a.date) : "—"}</td>
+        <td class="sub2">${esc(a.by2 || "—")}</td>
+        <td style="white-space:nowrap;text-align:right">
+          ${canEdit?`<button class="btn sm" data-awe="${a.id}">Змінити</button>
+                     <button class="btn sm danger" data-awd="${a.id}">Вилучити</button>`:""}</td>
+      </tr>`).join("")}
+    </tbody></table></div></div>`
+    : `<div class="card"><div class="empty"><strong>${all.length ? "Нічого не знайдено" : "Записів про нагороди ще немає"}</strong>${
+        all.length ? "Змініть пошуковий запит." : (canEdit ? "Натисніть «Додати нагороду», щоб внести першу." : "")}</div></div>`;
+
+  $("#awbody").querySelectorAll("[data-awv]").forEach(b=>b.onclick=()=>awardView(b.dataset.awv));
+  $("#awbody").querySelectorAll("[data-awe]").forEach(b=>b.onclick=()=>awardModal(b.dataset.awe));
+  $("#awbody").querySelectorAll("[data-awd]").forEach(b=>b.onclick=()=>awardDelete(b.dataset.awd));
+}
+
+async function awardView(id){
+  const a = (S.awards||[]).find(x => x.id === id);
+  if(!a) return;
+  modal(`${esc(a.kind || "Нагорода")} — ${esc(a.name)}`, `
+    <div class="sub2" style="margin-top:0">${esc(a.title || "")}${a.date?` · ${dstr(a.date)}`:""}${a.by2?` · ${esc(a.by2)}`:""}</div>
+    <div id="aw-img" style="margin-top:12px;text-align:center;background:var(--surface-2);border-radius:var(--radius);padding:12px">
+      <span class="sub2">Завантажую скан…</span></div>`,
+    [{t:"Закрити", f:close}]);
+  const data = await fileLoad(a.file && a.file.id);
+  const box = document.getElementById("aw-img");
+  if(!box) return;
+  if(!data){ box.innerHTML = `<span class="sub2" style="color:var(--crit)">Скан не знайдено у сховищі</span>`; return; }
+  box.innerHTML = /^data:application\/pdf/.test(data)
+    ? `<a class="btn" href="${data}" download="${esc(a.name)}.pdf">Завантажити PDF</a>`
+    : `<img src="${data}" alt="скан" style="max-width:100%;max-height:70vh;border-radius:2px">`;
+}
+
+function awardModal(id){
+  const canEdit = ME.admin || S.role === "apteka";
+  if(!canEdit) return toast("Перелік нагород веде завідувач аптеки", true);
+  const a = id ? (S.awards||[]).find(x => x.id === id) : null;
+  let pending = null, picked = false;                  // новий скан до збереження
+
+  modal(a ? "Зміна запису" : "Нова нагорода", `
+    <div class="grid g2">
+      <div class="field" style="grid-column:1/-1"><label>Прізвище, ім'я, по батькові</label>
+        <input type="text" id="aw-name" value="${a?esc(a.name):""}" placeholder="Шевченко Іван Миколайович"></div>
+      <div class="field"><label>Звання</label>
+        <input type="text" id="aw-rank" list="aw-ranks" value="${a?esc(a.rank||""):""}">
+        <datalist id="aw-ranks">${RANKS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
+      <div class="field"><label>Вид нагороди</label>
+        <input type="text" id="aw-kind" list="aw-kinds" value="${a?esc(a.kind||""):"Подяка"}">
+        <datalist id="aw-kinds">${AWARD_KINDS.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist></div>
+      <div class="field" style="grid-column:1/-1"><label>Назва, за що нагороджено</label>
+        <input type="text" id="aw-title" value="${a?esc(a.title||""):""}" placeholder="За сумлінне виконання службових обов'язків"></div>
+      <div class="field"><label>Дата</label>
+        <input type="date" id="aw-date" value="${a?esc(a.date||""):ymd(today())}"></div>
+      <div class="field"><label>Ким нагороджено</label>
+        <input type="text" id="aw-by" value="${a?esc(a.by2||""):""}" placeholder="Начальник інституту"></div>
+      <div class="field" style="grid-column:1/-1"><label>Примітка</label>
+        <input type="text" id="aw-note" value="${a?esc(a.note||""):""}" placeholder="номер наказу, підстава"></div>
+    </div>
+    <div class="drop" id="aw-drop" style="margin-top:12px">
+      <strong>Перетягніть скан або натисніть, щоб вибрати</strong>
+      <span>зображення (JPG, PNG) або PDF; великі зображення зменшуються автоматично</span>
+      <input type="file" id="aw-file" accept="image/*,application/pdf" hidden>
+    </div>
+    <div id="aw-prev" style="margin-top:10px">${a && a.file
+      ? `<span class="sub2">Скан уже прикріплено${a.file.size?` · ${Math.round(a.file.size/1024)} КБ`:""}. Завантажте новий, щоб замінити.</span>` : ""}</div>`,
+    [{t:"Скасувати", f:close},{t:a?"Зберегти":"Додати", cls:"primary", f:save2}]);
+
+  const drop = document.getElementById("aw-drop"), file = document.getElementById("aw-file");
+  drop.onclick = ()=>file.click();
+  drop.ondragover = e=>{e.preventDefault(); drop.classList.add("over");};
+  drop.ondragleave = ()=>drop.classList.remove("over");
+  drop.ondrop = e=>{e.preventDefault(); drop.classList.remove("over"); if(e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]);};
+  file.onchange = e=>{ if(e.target.files[0]) pick(e.target.files[0]); };
+
+  async function pick(f){
+    picked = true; pending = null;
+    const box = document.getElementById("aw-prev");
+    box.innerHTML = `<span class="sub2">Опрацьовую…</span>`;
+    try{
+      const r = await shrinkImage(f, 1400, 0.72);
+      const kb = Math.round(r.data.length * 0.75 / 1024);
+      if(kb > 4500){ box.innerHTML = `<span class="sub2" style="color:var(--crit)">Файл завеликий (${kb} КБ). Зменшіть його або зробіть скан меншої якості.</span>`; return; }
+      pending = {data:r.data, mime:f.type, size:Math.round(r.data.length*0.75), w:r.w, h:r.h, fname:f.name};
+      box.innerHTML = /^image\//.test(f.type)
+        ? `<div style="text-align:center"><img src="${r.data}" style="max-height:180px;max-width:100%;border-radius:2px">
+           <div class="sub2" style="margin-top:5px">${esc(f.name)} · ${kb} КБ${r.w?` · ${r.w}×${r.h}`:""}</div></div>`
+        : `<span class="sub2">${esc(f.name)} · ${kb} КБ (PDF)</span>`;
+    }catch(err){ picked = false; box.innerHTML = `<span class="sub2" style="color:var(--crit)">${esc(err.message)}</span>`; }
+  }
+
+  async function save2(){
+    const el = i => document.getElementById(i);
+    const name = el("aw-name").value.trim();
+    if(!name) return toast("Вкажіть прізвище, ім'я та по батькові", true);
+    if(picked && !pending) return toast("Скан ще опрацьовується або не розпізнано — зачекайте або оберіть інший файл", true);
+    const data = {
+      name, rank:el("aw-rank").value.trim(), kind:el("aw-kind").value.trim(),
+      title:el("aw-title").value.trim(), date:el("aw-date").value,
+      by2:el("aw-by").value.trim(), note:el("aw-note").value.trim()
+    };
+    let rec = a;
+    if(rec){ Object.assign(rec, data); }
+    else { rec = Object.assign({id:uid("aw"), at:Date.now(), added:ME.name}, data); (S.awards = S.awards||[]).push(rec); }
+    if(pending){
+      const fid = rec.file ? rec.file.id : uid("f");
+      try{
+        await fileSave(fid, pending.data);
+        rec.file = {id:fid, mime:pending.mime, size:pending.size, w:pending.w, h:pending.h, fname:pending.fname};
+      }catch(e){ toast("Скан не збережено: " + e.message, true); }
+    }
+    log("Система", `${a?"Змінено":"Внесено"} запис про нагороду: ${data.kind||"нагорода"} — ${name}${data.date?", "+dstr(data.date):""}`);
+    close(); toast(a?"Зміни збережено":"Запис додано"); render();
+  }
+}
+
+function awardDelete(id){
+  const a = (S.awards||[]).find(x => x.id === id);
+  if(!a) return;
+  if(!(ME.admin || S.role === "apteka")) return toast("Перелік нагород веде завідувач аптеки", true);
+  modal("Вилучення запису", `<p style="margin:0">Вилучити запис «${esc(a.kind||"нагорода")} — ${esc(a.name)}»${a.file?" разом зі сканом":""}? Дію буде записано в журнал.</p>`,
+    [{t:"Скасувати", f:close},{t:"Вилучити", cls:"danger", f:async ()=>{
+      if(a.file) await fileDel(a.file.id);
+      S.awards = S.awards.filter(x => x.id !== id);
+      log("Система", `Вилучено запис про нагороду: ${a.kind||"нагорода"} — ${a.name}`);
+      close(); toast("Запис вилучено"); render();
+    }}]);
+}
+
+function exportAwards(){
+  const aoa = [["Дата","Прізвище, ім'я, по батькові","Звання","Вид нагороди","Назва, за що","Ким нагороджено","Примітка","Скан"]];
+  (S.awards||[]).slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""))
+    .forEach(a=>aoa.push([a.date?dstr(a.date):"", a.name, a.rank||"", a.kind||"", a.title||"",
+      a.by2||"", a.note||"", a.file?"є":""]));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Нагороди");
+  XLSX.writeFile(wb, "nagorody-" + ymd(today()) + ".xlsx");
+  log("Система", "Вивантажено перелік нагород");
   toast("Файл сформовано");
 }
 
