@@ -904,7 +904,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 02.10.2026 · нові надходження";
+const BUILD = "збірка 06.10.2026 · скасування списань";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -933,7 +933,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], awards:[], contractors:{}, codes:{}, users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], awards:[], writeoffs:[], contractors:{}, codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
@@ -969,7 +969,7 @@ function migrate(){
     conclusion:"Комісія, перевіривши ведення документації медичної частини, встановила, що зазначене в акті майно було використано за призначенням і підлягає списанню.",
     account:"", corr:""
   };
-  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","receipts","awards","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
+  ["items","batches","requests","log","rx","assets","tasks","taskLog","temp","issues","receipts","awards","writeoffs","users"].forEach(k=>{ if(!Array.isArray(S[k])) S[k] = []; });
   S.items.forEach(i => { if(!i.inn) i.inn = guessINN(i.name); });
   if(typeof S.req !== "number") S.req = S.requests.length;
   if(typeof S.inv !== "number") S.inv = 0;
@@ -1004,7 +1004,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","awards","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","awards","writeoffs","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -2700,9 +2700,48 @@ function writeOffModal(loc, itemId){
       const q = parseFloat($("#wq").value)||0, reason = $("#wr").value.trim() || "не вказано";
       if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
       if(q>have+0.0001) return toast("Списати можна не більше ніж " + qty(have), true);
-      takeFEFO(loc, itemId, q);
+      const took = takeFEFO(loc, itemId, q).taken;
+      logWriteOff(loc, "позиція", reason, [{itemId, qty:q,
+        parts:took.map(x=>({qty:x.qty, price:x.price, expiry:x.expiry, src:x.src}))}]);
       log("Списання", `${LOCS[loc].name}: списано ${qty(q)} ${it.unit} «${it.name}» — ${reason}`);
       close(); toast("Списано " + qty(q) + " " + it.unit); render();
+    }}]);
+}
+
+/* ---------- журнал списань, щоб їх можна було скасувати ---------- */
+function logWriteOff(loc, kind, why, lines){
+  const rec = {id:uid("wo"), loc, kind, why, at:Date.now(), by:ME.name, lines};
+  (S.writeoffs = S.writeoffs || []).push(rec);
+  return rec;
+}
+const woAt = loc => (S.writeoffs||[]).filter(x => x.loc === loc && !x.undo).sort((a,b)=>b.at-a.at);
+const canUndoWO = loc => ME.admin || S.role === loc || (S.role === "senior" && loc === "post");
+
+function undoWriteOff(id){
+  const w = (S.writeoffs||[]).find(x => x.id === id);
+  if(!w || w.undo) return;
+  if(!canUndoWO(w.loc)) return toast("Скасувати списання може підрозділ-власник або завідувач аптеки", true);
+  const total = w.lines.reduce((s2,l)=>s2+l.qty, 0);
+  modal("Скасування списання", `
+    <p style="margin-top:0">Списання ${dtstr(w.at)}${w.by?", "+esc(w.by):""}${w.why?` — ${esc(w.why)}`:""}.</p>
+    <div class="tw" style="max-height:240px"><table><thead><tr><th>Препарат</th><th class="num">Повернеться</th>
+      <th>Партії</th></tr></thead><tbody>
+      ${w.lines.map(l=>{const it=item(l.itemId); return `<tr><td>${esc(it.name)}</td>
+        <td class="num">${qty(l.qty)} ${esc(it.unit)}</td>
+        <td class="sub2">${(l.parts||[]).length ? "з тими самими термінами" : "термін не збережено"}</td></tr>`}).join("")}
+    </tbody></table></div>
+    <p class="sub2" style="margin-top:10px">Медикаменти повернуться на залишок ${LOCS[w.loc].name}.</p>`,
+    [{t:"Закрити", f:close},{t:"Повернути на залишок", cls:"danger", f:()=>{
+      const done = [];
+      w.lines.forEach(l => {
+        if((l.parts||[]).length) l.parts.forEach(pt => addBatch(w.loc, l.itemId, pt.qty, pt.price, pt.expiry, pt.src || "повернення"));
+        else addBatch(w.loc, l.itemId, l.qty, 0, "", "повернення після скасування");
+        done.push(`${item(l.itemId).name} — ${qty(l.qty)} ${item(l.itemId).unit}`);
+      });
+      mergeDupes();
+      w.undo = {by:ME.name, at:Date.now()};
+      log("Надходження", `Скасовано списання ${LOCS[w.loc].name} від ${dtstr(w.at)}: повернуто ${done.join("; ")}`);
+      close(); toast("Повернуто на залишок: " + qty(total) + " од."); render();
     }}]);
 }
 
@@ -3096,15 +3135,38 @@ function viewUnits(){
       </tbody></table></div>` : `<div class="empty"><strong>У підрозділі немає залишків</strong>${
         LOCS[cur].supplier ? "Медикаменти надходять сюди за заявкою до "+LOCS[LOCS[cur].supplier].name+"." : ""}</div>`}
     </div>
+    ${drawWriteOffs(cur, canEdit)}
     ${cur==="feldsher" ? drawAssetsCard(cur, canEdit) + drawSupplyStock(cur, canEdit) : ""}`;
     $("#ubody").querySelectorAll("[data-off]").forEach(b=>b.onclick=()=>writeOffModal(cur, b.dataset.off));
     $("#ubody").querySelectorAll("[data-give]").forEach(b=>b.onclick=()=>issueOutModal(cur, b.dataset.give));
+    $("#ubody").querySelectorAll("[data-wou]").forEach(b=>b.onclick=()=>undoWriteOff(b.dataset.wou));
     if(canEdit && document.getElementById("u-woff")) document.getElementById("u-woff").onclick = ()=>writeOffImportModal(cur);
     if(canEdit && document.getElementById("u-win")) document.getElementById("u-win").onclick = ()=>importModal(cur);
     if(canEdit && document.getElementById("u-order")) document.getElementById("u-order").onclick = ()=>newReqModal();
     if(canEdit && document.getElementById("u-rcv")) document.getElementById("u-rcv").onclick = ()=>receiptsModal(cur);
     bindAssets(cur, canEdit);
     $("#ubody").querySelectorAll("[data-ord]").forEach(b=>b.onclick=()=>newReqModal(b.dataset.ord));
+  }
+
+  /* останні списання — щоб помилкове можна було одразу скасувати */
+  function drawWriteOffs(loc, canEdit){
+    const list = woAt(loc).slice(0, 8);
+    if(!list.length) return "";
+    return `<div class="card" style="margin-top:14px"><header><h3>Останні списання</h3>
+        <span class="spacer"></span><span class="eyebrow">${woAt(loc).length} усього</span></header>
+      <div class="tw" style="max-height:260px"><table><thead><tr>
+        <th>Коли</th><th>Що списано</th><th class="num">Кількість</th><th>Підстава</th><th>Хто</th>
+        ${canUndoWO(loc)?"<th></th>":""}</tr></thead><tbody>
+      ${list.map((x,i)=>`<tr>
+        <td class="mono sub2">${dtstr(x.at)}</td>
+        <td>${x.lines.slice(0,3).map(l=>esc(item(l.itemId).name)).join("<br>")}${x.lines.length>3?`<div class="sub2">та ще ${x.lines.length-3}</div>`:""}</td>
+        <td class="num">${qty(x.lines.reduce((s2,l)=>s2+l.qty,0))}</td>
+        <td class="sub2">${esc(x.why||"—")}<div class="sub2">${esc(x.kind||"")}</div></td>
+        <td class="sub2">${esc(x.by||"—")}</td>
+        ${canUndoWO(loc)?`<td style="text-align:right">
+          <button class="btn sm ${i===0?"danger":""}" data-wou="${x.id}">${i===0?"Скасувати останнє":"Скасувати"}</button></td>`:""}
+      </tr>`).join("")}
+      </tbody></table></div></div>`;
   }
 
   /* що є в постачальника — щоб замовити собі на склад */
@@ -3624,7 +3686,12 @@ function writeOffImportModal(loc){
         const list = stockRows(loc);
         if(!list.length){ close(); return toast("Залишків немає", true); }
         const total = list.reduce((a,b)=>a+b.qty,0);
-        list.forEach(x => takeFEFO(loc, x.itemId, x.qty));
+        const wl = [];
+        list.forEach(x => {
+          const took = takeFEFO(loc, x.itemId, x.qty).taken;
+          wl.push({itemId:x.itemId, qty:x.qty, parts:took.map(y=>({qty:y.qty, price:y.price, expiry:y.expiry, src:y.src}))});
+        });
+        if(wl.length) logWriteOff(loc, "обнулення", why, wl);
         log("Списання", `${LOCS[loc].name}: обнулено залишок — ${list.length} позицій, ${qty(total)} од. Підстава: ${why}`);
         close(); toast("Залишок обнулено: " + list.length + " позицій"); render();
       }}]);
@@ -3693,12 +3760,14 @@ function writeOffImportModal(loc){
 
     document.getElementById("w-commit").onclick = ()=>{
       const why = document.getElementById("w-why").value.trim() || "за накладною";
-      const done = [];
+      const done = [], wl = [];
       found.forEach(x=>{
         if(x.take <= 0.0001) return;
-        takeFEFO(loc, x.itemId, x.take);
+        const took = takeFEFO(loc, x.itemId, x.take).taken;
+        wl.push({itemId:x.itemId, qty:x.take, parts:took.map(y=>({qty:y.qty, price:y.price, expiry:y.expiry, src:y.src}))});
         done.push(`${x.item.name} — ${qty(x.take)} ${x.item.unit}`);
       });
+      if(wl.length) logWriteOff(loc, "за накладною", why, wl);
       if(!done.length){ close(); return toast("Списувати нічого", true); }
       log("Списання", `${LOCS[loc].name}: за накладною списано ${done.length} позицій — ${done.join("; ")}. Підстава: ${why}`
         + (short.length ? `. Не вистачило: ${short.map(x=>x.item.name + " (" + qty(x.want - x.have) + ")").join("; ")}` : ""));
