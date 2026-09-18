@@ -177,7 +177,9 @@ function gate(req, res, next) {
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
-app.use(express.json({ limit: "6mb" }));
+/* Скани нагород надходять окремими ключами й можуть важити кілька мегабайтів,
+   тому межа тіла запиту велика. Основна база залишається компактною. */
+app.use(express.json({ limit: "24mb" }));
 
 // проста заслінка від підбору пароля
 const tries = new Map();
@@ -232,15 +234,35 @@ app.delete("/api/kv/:key", gate, async (req, res) => {
 });
 
 // резервна копія всієї бази одним файлом
+/* Копія бази може важити десятки мегабайтів — віддаємо її потоком,
+   інакше великі бази впираються в обмеження пам'яті. */
 app.get("/api/backup", gate, async (req, res) => {
   const dump = await store.dump();
+  /* ?light=1 — копія без сканів: у рази менша, годиться для щоденного збереження */
+  const light = String(req.query.light || "") === "1";
+  const data = {};
+  Object.keys(dump).forEach(k => { if (!(light && k.startsWith("medcrm:file:"))) data[k] = dump[k]; });
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Content-Disposition",
-    `attachment; filename="med-crm-backup-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.send(JSON.stringify({ exportedAt: new Date().toISOString(), data: dump }, null, 2));
+    `attachment; filename="med-crm-backup${light ? "-light" : ""}-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.send(JSON.stringify({ exportedAt: new Date().toISOString(), light, data }, null, 2));
 });
 
 // відновлення з резервної копії
+// перелік ключів — щоб бачити, що саме займає місце
+app.get("/api/keys", gate, async (req, res) => {
+  try {
+    const all = await store.list("");
+    const out = [];
+    for (const k of all) {
+      const row = await store.get(k);
+      out.push({ key: k, bytes: row && row.value ? Buffer.byteLength(row.value, "utf8") : 0, rev: row ? row.rev : 0 });
+    }
+    out.sort((a, b) => b.bytes - a.bytes);
+    res.json({ count: out.length, total: out.reduce((s2, x) => s2 + x.bytes, 0), keys: out });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 app.post("/api/restore", gate, async (req, res) => {
   const data = req.body && req.body.data;
   if (!data || typeof data !== "object") return res.status(400).json({ error: "Очікується поле data" });
