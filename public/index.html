@@ -904,7 +904,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 06.10.2026 · скасування списань";
+const BUILD = "збірка 18.09.2026 · виправлення сховища";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -5719,6 +5719,8 @@ function exportTemp(){
 /* Скани зберігаються окремими ключами сховища, а не в спільній базі:
    інакше кожне збереження пересилало б мегабайти всім підрозділам. */
 const FILE_KEY = id => "medcrm:file:" + id;
+const awSize = () => (S.awards||[]).reduce((s2,a)=>s2 + ((a.file && a.file.size) || 0), 0);
+const FILE_MAX = 1200 * 1024;                       // 1,2 МБ на скан — більше сховище не приймає
 const AWARD_KINDS = ["Подяка","Грамота","Почесна грамота","Відзнака","Медаль","Нагрудний знак","Цінний подарунок","Інше"];
 
 async function fileSave(id, dataUrl){ await storage.set(FILE_KEY(id), dataUrl); }
@@ -5734,10 +5736,18 @@ function shrinkImage(file, maxSide, quality){
       if(!/^image\//.test(file.type)) return res({data:fr.result, w:0, h:0});
       const img = new Image();
       let settled = false;
-      const asIs = ()=>{ if(!settled){ settled = true; res({data:fr.result, w:0, h:0}); } };
-      /* якщо браузер не зміг відкрити зображення — зберігаємо оригінал, а не відмовляємо */
+      /* якщо браузер не зміг відкрити зображення — зберігаємо оригінал,
+         але тільки якщо він невеликий: інакше сховище переповниться */
+      const asIs = ()=>{
+        if(settled) return;
+        settled = true;
+        const bytes = Math.round(fr.result.length * 0.75);
+        if(bytes > FILE_MAX) return rej(new Error("зображення не вдалося стиснути, а оригінал завеликий ("
+          + Math.round(bytes/1024) + " КБ). Збережіть скан у меншій якості."));
+        res({data:fr.result, w:0, h:0});
+      };
       img.onerror = asIs;
-      setTimeout(asIs, 4000);
+      setTimeout(asIs, 8000);
       img.onload = ()=>{
         if(settled) return;
         settled = true;
@@ -5779,8 +5789,9 @@ function viewAwards(){
         <div class="v">${all.filter(a=>(a.date||"").startsWith(year)).length}</div><div class="n">нагороджень</div></div>
       <div class="stat"><div class="eyebrow">Зі сканами</div><div class="v">${all.filter(a=>a.file).length}</div>
         <div class="n">із ${all.length}</div></div>
-      <div class="stat"><div class="eyebrow">Видів</div><div class="v">${byKind.size}</div>
-        <div class="n">${[...byKind.keys()].slice(0,2).join(", ") || "—"}</div></div>
+      <div class="stat ${awSize() > 12*1024*1024 ? "crit" : awSize() > 6*1024*1024 ? "warn" : ""}">
+        <div class="eyebrow">Обсяг сканів</div><div class="v">${(awSize()/1048576).toFixed(1)} МБ</div>
+        <div class="n">${awSize() > 12*1024*1024 ? "забагато — прибирайте зайве" : "у сховищі"}</div></div>
     </div>
     <div class="row" style="margin-bottom:14px">
       <input type="text" id="aw-q" placeholder="пошук за прізвищем, видом або назвою" value="${esc(flt.aw)}" style="flex:1">
@@ -5882,9 +5893,18 @@ function awardModal(id){
     const box = document.getElementById("aw-prev");
     box.innerHTML = `<span class="sub2">Опрацьовую…</span>`;
     try{
-      const r = await shrinkImage(f, 1400, 0.72);
-      const kb = Math.round(r.data.length * 0.75 / 1024);
-      if(kb > 4500){ box.innerHTML = `<span class="sub2" style="color:var(--crit)">Файл завеликий (${kb} КБ). Зменшіть його або зробіть скан меншої якості.</span>`; return; }
+      let r = await shrinkImage(f, 1400, 0.72);
+      let kb = Math.round(r.data.length * 0.75 / 1024);
+      /* якщо все ще завеликий — стискаємо сильніше */
+      if(kb * 1024 > FILE_MAX && /^image\//.test(f.type)){
+        r = await shrinkImage(f, 1000, 0.6);
+        kb = Math.round(r.data.length * 0.75 / 1024);
+      }
+      if(kb * 1024 > FILE_MAX){
+        box.innerHTML = `<span class="sub2" style="color:var(--crit)">Файл завеликий (${kb} КБ), межа — ${Math.round(FILE_MAX/1024)} КБ.
+          Для PDF збережіть сторінку як зображення або зменшіть роздільність скану.</span>`;
+        return;
+      }
       pending = {data:r.data, mime:f.type, size:Math.round(r.data.length*0.75), w:r.w, h:r.h, fname:f.name};
       box.innerHTML = /^image\//.test(f.type)
         ? `<div style="text-align:center"><img src="${r.data}" style="max-height:180px;max-width:100%;border-radius:2px">
