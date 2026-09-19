@@ -433,11 +433,19 @@ tr.fresh:hover > td{background:#DBEDE2}
   var revs = {}, syncing = false;
 
   async function req(method, url, body){
-    var r = await fetch(url, {
-      method: method, credentials: "same-origin",
-      headers: body ? {"Content-Type":"application/json"} : undefined,
-      body: body ? JSON.stringify(body) : undefined
-    });
+    var r;
+    try{
+      r = await fetch(url, {
+        method: method, credentials: "same-origin",
+        headers: body ? {"Content-Type":"application/json"} : undefined,
+        body: body ? JSON.stringify(body) : undefined
+      });
+    }catch(err){
+      /* мережа недоступна — позначаємо як збій зв'язку, щоб застосунок зупинився */
+      var e2 = new Error("немає зв'язку з сервером");
+      e2.io = true;
+      throw e2;
+    }
     if(r.status === 401){ location.href = "/login"; throw new Error("Потрібен вхід"); }
     return r;
   }
@@ -446,11 +454,12 @@ tr.fresh:hover > td{background:#DBEDE2}
     async get(key){
       if(LOCAL(key)){
         var v = localStorage.getItem(key);
-        if(v === null) throw new Error("Ключа немає");
+        if(v === null){ var em = new Error("Ключа немає"); em.missing = true; throw em; }
         return {key:key, value:v};
       }
       var r = await req("GET", "/api/kv/" + encodeURIComponent(key));
-      if(r.status === 404) throw new Error("Ключа немає");
+      if(r.status === 404){ var e0 = new Error("Ключа немає"); e0.missing = true; throw e0; }
+      if(!r.ok){ var e1 = new Error("Сервер відповів " + r.status); e1.io = true; throw e1; }
       var j = await r.json(); revs[key] = j.rev;
       return {key:key, value:j.value};
     },
@@ -904,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 18.09.2026 · виправлення сховища";
+const BUILD = "збірка 18.09.2026 · захист даних";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -937,11 +946,24 @@ function blank(){
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0};
 }
 async function load(){
+  /* Читання бази. Помилка зв'язку і відсутність бази — різні речі:
+     при збої нічого не створюємо й не зберігаємо, інакше демонстраційні дані
+     затруть робочу базу. */
+  let missing = false;
   try{
     const r = await window.storage.get(SKEY);
     if(r && r.value){ S = JSON.parse(r.value); }
-  }catch(e){ /* ключа ще немає */ }
-  if(!S || !Array.isArray(S.items) || !Array.isArray(S.batches)){ S = blank(); seed(); }
+    else missing = true;
+  }catch(e){
+    /* збоєм вважаємо лише явну помилку зв'язку або сервера;
+       усе інше означає, що бази ще немає (перший запуск) */
+    if(e && e.io){ loadFailed(e); return; }
+    missing = true;
+  }
+  if(S && (!Array.isArray(S.items) || !Array.isArray(S.batches))){
+    loadFailed(new Error("вміст бази не розпізнано")); return;
+  }
+  if(missing || !S){ S = blank(); seed(); }
   if(!S.users) S.users = [];
   S.role = S.role in LOCS ? S.role : "apteka";
   await ensureUsers();
@@ -950,6 +972,30 @@ async function load(){
   lastSaved = snapshot();
   save();
 }
+/* Збій читання: показуємо повідомлення і зупиняємось.
+   Нічого не створюємо й не пишемо — база на сервері лишається недоторканою. */
+let loadBroken = false;
+function loadFailed(err){
+  loadBroken = true;
+  const msg = err && err.message ? err.message : "невідома помилка";
+  document.body.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+      font-family:Inter,system-ui,sans-serif;background:#16211C;color:#E8EFE9">
+      <div style="max-width:620px">
+        <div style="font-size:11px;letter-spacing:.14em;color:#7FBFA4;text-transform:uppercase">Медична частина КІ НГУ</div>
+        <h1 style="font-size:26px;margin:10px 0 14px">Не вдалося прочитати базу</h1>
+        <p style="line-height:1.55;color:#B9C9BF;margin:0 0 12px">
+          Система не змінила жодних даних: усе, що було збережено, лишається на сервері.
+          Спробуйте оновити сторінку за хвилину.</p>
+        <p style="line-height:1.55;color:#7E8F85;font-size:13px;margin:0 0 20px">Причина: ${esc(msg)}</p>
+        <button id="retry" style="padding:11px 18px;border-radius:3px;border:1px solid #2C7A5D;
+          background:#14624F;color:#fff;font:inherit;cursor:pointer">Спробувати ще раз</button>
+      </div>
+    </div>`;
+  const b = document.getElementById("retry");
+  if(b) b.onclick = ()=>location.reload();
+}
+
 /* приведення раніше збереженої бази до нової моделі */
 function migrate(){
   if(!S.org) S.org = {name:"", addr:"", edrpou:"", lic:""};
@@ -989,10 +1035,34 @@ function migrate(){
 }
 let saveT = null, lastSaved = null, saving = false;
 
+let overwriteOK = false;
+/* Попередження перед підозрілим записом: користувач вирішує сам. */
+function guardModal(wasLen, nowLen){
+  if(document.getElementById("guard-box")) return;
+  const box = document.createElement("div");
+  box.id = "guard-box";
+  box.innerHTML = `<div class="scrim"><div class="modal" style="max-width:560px">
+    <header><h3>Зупинено запис у базу</h3></header>
+    <div class="body">
+      <p style="margin-top:0">Система збиралася записати <b>${Math.round(nowLen/1024)} КБ</b> замість
+        <b>${Math.round(wasLen/1024)} КБ</b>, які було прочитано. Це схоже на втрату даних, тому запис зупинено.</p>
+      <p class="sub2">Найімовірніше, стався збій зв'язку. Оновіть сторінку — дані на сервері не змінені.
+        Продовжуйте лише якщо ви свідомо очистили базу.</p>
+    </div>
+    <footer>
+      <button class="btn primary" id="g-reload">Оновити сторінку</button>
+      <button class="btn danger" id="g-force">Усе одно записати</button>
+    </footer></div></div>`;
+  document.body.appendChild(box);
+  document.getElementById("g-reload").onclick = ()=>location.reload();
+  document.getElementById("g-force").onclick = ()=>{ overwriteOK = true; box.remove(); flush(); };
+}
+
 /* Запис у сховище. Головне правило: якщо стан не змінився — не пишемо нічого.
    Інакше кожне відкриття вкладки рахувалося б зміною, і всі інші користувачі
    без потреби перечитували б базу. */
 function save(){
+  if(loadBroken) return;
   clearTimeout(saveT);
   saveT = setTimeout(flush, 400);
 }
@@ -1042,6 +1112,14 @@ async function flush(attempt){
   let txt;
   try{ txt = snapshot(); }catch(e){ return; }
   if(txt === lastSaved) return;                 // змін немає
+
+  /* Запобіжник: демонстраційна база не повинна затирати робочу.
+     Якщо ми збираємось записати різко менший обсяг, ніж було прочитано,
+     зупиняємось і питаємо — так втрата даних стає неможливою. */
+  if(lastSaved && txt.length * 4 < lastSaved.length && lastSaved.length > 20000 && !overwriteOK){
+    saving = false;
+    return guardModal(lastSaved.length, txt.length);
+  }
   saving = true;
   try{
     await window.storage.set(SKEY, txt);
@@ -6282,5 +6360,5 @@ function close(){ $("#modal-root").innerHTML=""; document.removeEventListener("k
 function escClose(e){ if(e.key==="Escape") close(); }
 
 /* ---------- старт ---------- */
-(async ()=>{ await load(); render(); })();
+(async ()=>{ await load(); if(!loadBroken) render(); })();
 </script>
