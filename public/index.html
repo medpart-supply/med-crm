@@ -913,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 18.09.2026 · захист даних";
+const BUILD = "збірка 19.09.2026 · звільнення";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -1385,6 +1385,9 @@ function guessCat(rank){
   if(CIV_RANKS.some(x => r.indexOf(x) >= 0)) return "civ";
   return "";
 }
+/* звільнення та госпіталізація — вільний текст, показуємо лише заповнене */
+const rxExtra = r => (r.free ? `<div class="sub2" style="margin-top:4px"><b>Звільнення:</b> ${esc(r.free)}</div>` : "")
+  + (r.hosp ? `<div class="sub2" style="margin-top:4px"><b>Госпіталізація / лікарняний:</b> ${esc(r.hosp)}</div>` : "");
 const patientLine = r => [r.rank, r.group, r.cat ? CAT_NAME(r.cat) : ""].filter(Boolean).join(" · ");
 
 const RX_CHAIN   = ["post","senior"];                // призначення: пост → старша медсестра
@@ -4094,6 +4097,7 @@ function viewReq(){
             <div style="margin-top:5px"><span class="tag acc"><span class="mono">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span></span>
               <span class="sub2"> ${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||"уточнений код"):r.dx.name)):"діагноз не вказано"}${r.dxNote?" — "+esc(r.dxNote):""}</span></div>
             ${r.comment? `<div class="sub2" style="margin-top:4px">Коментар: ${esc(r.comment)}</div>`:""}
+            ${rxExtra(r)}
           </div>
           <div class="row">
             ${canReview()? `<button class="btn primary sm" data-rev="${r.id}">Перевірити та видати</button>
@@ -4133,6 +4137,7 @@ function viewReq(){
               <span class="sub2"> ${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||"уточнений код"):r.dx.name)):"діагноз не вказано"}${
                 r.dx&&r.dx.sub?" · блок "+esc(r.dx.code):""}${r.dxNote?" — "+esc(r.dxNote):""}</span></div>
             ${r.comment? `<div class="sub2" style="margin-top:4px">Коментар: ${esc(r.comment)}</div>`:""}
+            ${rxExtra(r)}
           </div>
           <div class="row">
             ${(mine || (ME.admin && exec)) ? `<button class="btn primary sm" data-rxi="${r.id}">Видати ${mine?"свою частину":"за "+LOCS[exec].short}</button>`:""}
@@ -4304,7 +4309,7 @@ function viewReq(){
       <div class="card" style="margin-top:14px"><header><h3>Перелік</h3><span class="spacer"></span>
           <span class="eyebrow">${all.length}</span></header>
         ${all.length? `<div class="tw"><table><thead><tr><th>№</th><th>Дата</th><th>Пацієнт</th><th>Діагноз</th>
-          <th>Журнал</th><th>Призначив</th><th>Видано</th><th>Стан</th><th></th></tr></thead><tbody>
+          <th>Журнал</th><th>Призначив</th><th>Видано</th><th>Звільнення / госпіталізація</th><th>Стан</th><th></th></tr></thead><tbody>
           ${all.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="mono sub2">${dstr(new Date(r.closed||r.created))}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
@@ -4314,6 +4319,7 @@ function viewReq(){
               : `<span class="sub2">${r.cat?esc(CAT_NAME(r.cat)):"—"}</span>`}</td>
             <td class="sub2">${esc(r.doctor)}</td>
             <td class="sub2">${r.lines.filter(l=>l.got>0).map(l=>esc(item(l.itemId).name)+" "+qty(l.got)).join("; ")||"—"}</td>
+            <td class="sub2">${r.free?`<div>${esc(r.free)}</div>`:""}${r.hosp?`<div style="color:var(--warn)">${esc(r.hosp)}</div>`:""}${!r.free&&!r.hosp?"—":""}</td>
             <td>${statusTag(r)}</td>
             <td style="text-align:right">${["issued","partial"].includes(r.status) && canUndo(r)
               ? `<button class="btn sm danger" data-undo="${r.id}">Скасувати</button>` : ""}</td></tr>`).join("")}
@@ -4356,11 +4362,12 @@ function viewReq(){
     document.getElementById("m-kind").onchange = e => { flt.monthKind = e.target.value; render(); };
     document.getElementById("m-exp").onclick = ()=>{
       const wb = XLSX.utils.book_new();
-      const a1 = [["№","Дата","Пацієнт","Звання","Категорія обліку","Підрозділ пацієнта","Код МКХ","Діагноз","Призначив","Ким призначено (підрозділ)","Терміновий","Стан","Препарат","Видано","Одиниця","Звідки"]];
+      const a1 = [["№","Дата","Пацієнт","Звання","Категорія обліку","Підрозділ пацієнта","Код МКХ","Діагноз","Призначив","Ким призначено (підрозділ)","Терміновий","Стан","Звільнення","Госпіталізація / лікарняний лист","Препарат","Видано","Одиниця","Звідки"]];
       all.forEach(r => {
         const base = [r.no, dstr(new Date(r.closed||r.created)), r.patient, r.rank||"", r.cat?CAT_NAME(r.cat):"", r.group||"",
           r.dx?(r.dx.det||r.dx.sub||r.dx.code):"", r.dx?(r.dx.det?r.dx.detName:(r.dx.sub?r.dx.subName:r.dx.name)):"",
-          r.doctor, LOCS[r.docLoc]?LOCS[r.docLoc].name:"", r.cito?"Cito!":"", statusTag(r).replace(/<[^>]+>/g,"")];
+          r.doctor, LOCS[r.docLoc]?LOCS[r.docLoc].name:"", r.cito?"Cito!":"", statusTag(r).replace(/<[^>]+>/g,""),
+          r.free||"", r.hosp||""];
         if(!r.lines.length) a1.push(base.concat(["","","",""]));
         r.lines.forEach(l => a1.push(base.concat([item(l.itemId).name, l.got||0, item(l.itemId).unit,
           (l.from||[]).map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · ")])));
@@ -4892,6 +4899,12 @@ function newRxModal(cito){
     <div id="rx-lines"></div>
     <div class="field" style="margin-top:12px"><label>Коментар</label>
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
+    <div class="grid g2" style="margin-top:12px">
+      <div class="field"><label>Звільнення</label>
+        <textarea id="rx-free" placeholder="Від занять, нарядів, фізичного навантаження — на який строк"></textarea></div>
+      <div class="field"><label>Госпіталізація / лікарняний лист</label>
+        <textarea id="rx-hosp" placeholder="Куди направлено, номер і строк лікарняного"></textarea></div>
+    </div>
     <p class="sub2" style="margin:10px 0 0">${cito
       ? "Терміновий рецепт не потребує погодження: списання відбувається одразу зі складу аптеки, поза ланцюгом постів."
       : "Призначення спершу перевіряє старша медсестра, після погодження списання йде за ланцюгом: пост медсестри → старша медсестра. Склад аптеки за призначеннями не списується."}</p>`,
@@ -5060,10 +5073,13 @@ function newRxModal(cito){
       cat:document.getElementById("rx-cat").value,
       rank:document.getElementById("rx-rank").value.trim(),
       group:document.getElementById("rx-group").value.trim(), cito:!!cito, dx, dxNote:document.getElementById("rx-dxnote").value.trim(),
-      comment:$("#rx-com").value.trim(), status: cito ? "pending" : "review", created:Date.now(),
+      comment:$("#rx-com").value.trim(),
+      free:(document.getElementById("rx-free")||{value:""}).value.trim(),
+      hosp:(document.getElementById("rx-hosp")||{value:""}).value.trim(),
+      status: cito ? "pending" : "review", created:Date.now(),
       lines:lines.map(l=>({itemId:l.itemId, want:l.want, got:0}))};
     (S.rx = S.rx||[]).push(r);
-    log("Рецепт", `${cito ? "Виписано ТЕРМІНОВИЙ рецепт (Cito!)" : "Створено призначення"} ${r.no}, пацієнт ${pat}${patientLine(r)?" ("+patientLine(r)+")":""}${r.cat?", "+CAT_NAME(r.cat):""}, діагноз ${dxLabel(dx)}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no, dx:dx.code});
+    log("Рецепт", `${cito ? "Виписано ТЕРМІНОВИЙ рецепт (Cito!)" : "Створено призначення"} ${r.no}, пацієнт ${pat}${patientLine(r)?" ("+patientLine(r)+")":""}${r.free?", звільнення: "+r.free:""}${r.hosp?", госпіталізація: "+r.hosp:""}${r.cat?", "+CAT_NAME(r.cat):""}, діагноз ${dxLabel(dx)}: ${lines.map(l=>item(l.itemId).name+" — "+qty(l.want)+" "+item(l.itemId).unit).join("; ")}`, {rx:r.no, dx:dx.code});
     close(); toast(cito ? "Cito! Рецепт " + r.no + " передано поза чергою"
                         : "Призначення " + r.no + " передано на контроль старшій медсестрі"); render();
   }
@@ -5093,6 +5109,7 @@ function issueRxModal(id){
         ${r.dx&&r.dx.sub?`<div class="sub2">${r.dx.det?"рубрика "+esc(r.dx.sub)+" · "+esc(r.dx.subName)+" · ":""}блок ${esc(r.dx.code)} · ${esc(r.dx.name)}</div>`:""}
         ${r.dxNote?`<div class="sub2">${esc(r.dxNote)}</div>`:""}</div></div>
     ${r.comment? `<p class="sub2" style="margin-top:0">Коментар: ${esc(r.comment)}</p>`:""}
+    ${rxExtra(r)}
     ${r.review? `<p class="sub2" style="margin-top:0">Погодила старша медсестра: ${esc(r.review.by)} · ${dtstr(r.review.at)}${r.review.changed?" (з правками)":""}${r.review.note?" — "+esc(r.review.note):""}</p>`:""}
     <table class="lines"><thead><tr><th>Препарат</th><th class="num">Потрібно ще</th>
       <th class="num">Є у вас</th><th class="num">Видати зараз</th><th>Партії (FEFO)</th></tr></thead><tbody>
@@ -5197,6 +5214,7 @@ function reviewRxModal(id){
     <div class="row" style="margin-bottom:10px">
       <div style="flex:1"><div class="eyebrow">Пацієнт</div><div class="name" id="rv-who">${esc(r.patient)}</div>
         <div class="sub2" id="rv-line">${esc(patientLine(r)) || "дані пацієнта не заповнені"}</div>
+        <div id="rv-extra">${rxExtra(r)}</div>
         <div class="sub2">Виписано ${dtstr(r.created)}</div></div>
       <button type="button" class="btn sm" id="rv-edit">Виправити дані</button>
     </div>
@@ -5208,6 +5226,7 @@ function reviewRxModal(id){
     </div>
     ${r.dxNote? `<p class="sub2" style="margin-top:0">${esc(r.dxNote)}</p>`:""}
     ${r.comment? `<p class="sub2" style="margin-top:0">Коментар: ${esc(r.comment)}</p>`:""}
+    ${rxExtra(r)}
     <div id="rev-lines"></div>
     <div class="row" style="margin-top:12px">
       <div class="field" style="flex:1;min-width:240px"><label>Додати препарат</label>
@@ -5243,6 +5262,10 @@ function reviewRxModal(id){
             ${CATS.map(c=>`<option value="${c[0]}" ${r.cat===c[0]?"selected":""}>${c[1]}</option>`).join("")}</select></div>
         <div class="field"><label>Дата й час виписки</label>
           <input type="datetime-local" id="rv-date" value="${localDT(r.created)}"></div>
+        <div class="field"><label>Звільнення</label>
+          <textarea id="rv-free">${esc(r.free||"")}</textarea></div>
+        <div class="field"><label>Госпіталізація / лікарняний лист</label>
+          <textarea id="rv-hosp">${esc(r.hosp||"")}</textarea></div>
       </div>
       <button type="button" class="btn sm primary" id="rv-save" style="margin-top:10px">Зберегти дані пацієнта</button>
     </div></div>`;
@@ -5262,6 +5285,10 @@ function reviewRxModal(id){
     if((r.group||"") !== un){ ch.push(`підрозділ: «${r.group||"—"}» → «${un||"—"}»`); r.group = un; }
     const ct = el("rv-cat").value;
     if((r.cat||"") !== ct){ ch.push(`категорія: «${r.cat?CAT_NAME(r.cat):"—"}» → «${ct?CAT_NAME(ct):"—"}»`); r.cat = ct; }
+    const fr = el("rv-free").value.trim();
+    if((r.free||"") !== fr){ ch.push(`звільнення: «${r.free||"—"}» → «${fr||"—"}»`); r.free = fr; }
+    const hs = el("rv-hosp").value.trim();
+    if((r.hosp||"") !== hs){ ch.push(`госпіталізація: «${r.hosp||"—"}» → «${hs||"—"}»`); r.hosp = hs; }
     const dv = el("rv-date").value;
     if(dv){
       const ts = new Date(dv).getTime();
@@ -5274,6 +5301,7 @@ function reviewRxModal(id){
     log("Рецепт", `Старша медсестра виправила дані призначення ${r.no}: ${ch.join("; ")}`, {rx:r.no});
     document.getElementById("rv-who").textContent = r.patient;
     document.getElementById("rv-line").textContent = patientLine(r) || "дані пацієнта не заповнені";
+    const ex = document.getElementById("rv-extra"); if(ex) ex.innerHTML = rxExtra(r);
     editOpen = false; drawEdit();
     toast("Дані пацієнта збережено");
     save();
