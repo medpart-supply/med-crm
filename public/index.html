@@ -913,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 19.09.2026 · звільнення";
+const BUILD = "збірка 19.09.2026 · номери рецептів";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -2452,6 +2452,38 @@ function moneyWords(v){
   return g + ", " + k;
 }
 const capFirst = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+
+/* ---------- зміна номера окремого рецепта чи призначення ---------- */
+const canRenum = () => ME.admin || S.role === "senior";
+function rxNoModal(id){
+  const r = (S.rx||[]).find(x => x.id === id);
+  if(!r) return;
+  if(!canRenum()) return toast("Номер змінює старша медсестра або завідувач аптеки", true);
+  modal(`Номер ${r.cito ? "рецепта Cito!" : "призначення"}`, `
+    <p class="sub2" style="margin-top:0">Пацієнт: <b>${esc(r.patient)}</b> · виписано ${dtstr(r.created)}.</p>
+    <div class="field"><label>Номер</label>
+      <input type="text" id="rn-no" value="${esc(r.no)}" style="font-family:'IBM Plex Mono',monospace"></div>
+    <p class="sub2" style="margin-top:10px">${r.cito
+      ? "Рецепти Cito! нумеруються числом, як у паперовому журналі. Якщо вказати номер більший за поточний лічильник, наступні рецепти продовжать нумерацію з нього."
+      : "Призначення зазвичай мають вигляд «Р-0012»."} Номер не може повторювати вже наявний.</p>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:()=>{
+      const v = document.getElementById("rn-no").value.trim();
+      if(!v) return toast("Номер не може бути порожнім", true);
+      if(v === r.no){ close(); return; }
+      const dup = (S.rx||[]).find(x => x.id !== id && String(x.no).trim().toLowerCase() === v.toLowerCase());
+      if(dup) return toast(`Номер ${v} уже має ${dup.cito?"рецепт":"призначення"} пацієнта ${dup.patient}`, true);
+      const was = r.no;
+      r.no = v;
+      /* лічильник не повинен видати цей номер повторно */
+      const n = parseInt(String(v).replace(/\D+/g, ""), 10);
+      if(!isNaN(n)){
+        if(r.cito){ if(n > (S.citoNo||0)) S.citoNo = n; }
+        else if(/^Р-/i.test(v)){ if(n > (S.rxNo||0)) S.rxNo = n; }
+      }
+      log("Рецепт", `Змінено номер ${r.cito?"рецепта Cito!":"призначення"}: ${was} → ${v} (пацієнт ${r.patient})`, {rx:v});
+      close(); toast("Номер змінено"); render();
+    }}]);
+}
 
 /* ---------- нумерація документів ---------- */
 function numModal(){
@@ -4062,7 +4094,7 @@ function viewReq(){
         return `<div style="padding:14px 16px;border-bottom:1px solid var(--line)">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
-            <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
+            <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>${canRenum()?`<button class="btn sm" data-rxn="${r.id}" style="margin-left:6px;padding:2px 7px" title="Змінити номер">змінити №</button>`:""}
               <span class="tag acc" style="margin-left:8px">${LOCS[r.from].name} → ${LOCS[r.to].name}</span></div>
             <div class="sub2" style="margin-top:4px">${dtstr(r.created)}${r.by2?" · "+esc(r.by2):""}${r.note?" · "+esc(r.note):""}</div>
           </div>
@@ -4090,7 +4122,7 @@ function viewReq(){
       ${rev.map(r => `<div style="padding:15px 16px;border-bottom:1px solid var(--line)">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
-            <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
+            <div><span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>${canRenum()?`<button class="btn sm" data-rxn="${r.id}" style="margin-left:6px;padding:2px 7px" title="Змінити номер">змінити №</button>`:""}
               <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}${patientLine(r)?", "+esc(patientLine(r)):""}</span>
               <span class="tag warn" style="margin-left:6px">на контролі</span></div>
             <div class="sub2" style="margin-top:4px">Призначив: ${esc(r.doctor)}${r.docLoc&&LOCS[r.docLoc]?" · "+LOCS[r.docLoc].name:""} · ${dtstr(r.created)}</div>
@@ -4128,7 +4160,7 @@ function viewReq(){
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
             <div>${r.cito? `<span class="tag crit" style="margin-right:6px;font-weight:600">CITO!</span>`:""}
-              <span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>
+              <span class="mono" style="font-weight:600;font-size:15px">${r.no}</span>${canRenum()?`<button class="btn sm" data-rxn="${r.id}" style="margin-left:6px;padding:2px 7px" title="Змінити номер">змінити №</button>`:""}
               <span class="tag acc" style="margin-left:8px">пацієнт: ${esc(r.patient)}${patientLine(r)?", "+esc(patientLine(r)):""}</span>
               ${exec ? `<span class="tag ${mine?"warn":""}" style="margin-left:6px">видає: ${LOCS[exec].short}</span>`
                      : `<span class="tag crit" style="margin-left:6px">немає залишків</span>`}</div>
@@ -4161,6 +4193,7 @@ function viewReq(){
       : (revHTML ? "" : `<div class="card"><div class="empty"><strong>Призначень, що потребують вашої участі, немає</strong>${
           canRx ? "Натисніть «Створити призначення», щоб призначити препарат пацієнту." : "Черга порожня."}</div></div>`));
     $("#rbody").querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>reviewRxModal(b.dataset.rev));
+    $("#rbody").querySelectorAll("[data-rxn]").forEach(b=>b.onclick=()=>rxNoModal(b.dataset.rxn));
     $("#rbody").querySelectorAll("[data-rxi]").forEach(b=>b.onclick=()=>issueRxModal(b.dataset.rxi));
     $("#rbody").querySelectorAll("[data-rxr]").forEach(b=>b.onclick=()=>rejectRxModal(b.dataset.rxr));
     $("#rbody").querySelectorAll("[data-rxc]").forEach(b=>b.onclick=()=>{
@@ -4310,7 +4343,7 @@ function viewReq(){
           <span class="eyebrow">${all.length}</span></header>
         ${all.length? `<div class="tw"><table><thead><tr><th>№</th><th>Дата</th><th>Пацієнт</th><th>Діагноз</th>
           <th>Журнал</th><th>Призначив</th><th>Видано</th><th>Звільнення / госпіталізація</th><th>Стан</th><th></th></tr></thead><tbody>
-          ${all.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
+          ${all.map(r=>`<tr><td class="mono">${r.no}${canRenum()?`<div><button class="btn sm" data-rxn="${r.id}" style="padding:2px 7px;margin-top:3px">змінити №</button></div>`:""}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="mono sub2">${dstr(new Date(r.closed||r.created))}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
             <td class="mono sub2">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</td>
@@ -4329,6 +4362,7 @@ function viewReq(){
     document.querySelectorAll("[data-mc]").forEach(b=>b.onclick=()=>{ flt.cat2 = b.dataset.mc; render(); });
     document.querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
     document.querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>undoRxModal(b.dataset.undo));
+    document.querySelectorAll("[data-rxn]").forEach(b=>b.onclick=()=>rxNoModal(b.dataset.rxn));
     const bulk = document.getElementById("m-bulk");
     if(bulk) bulk.onclick = catBulkModal;
     document.getElementById("m-sel").onchange = e => {
@@ -4593,7 +4627,7 @@ function viewReq(){
         <span class="eyebrow">${doneRx.length}</span></header>
         ${doneRx.length? `<div class="tw"><table><thead><tr><th>№</th><th>Пацієнт</th><th>Діагноз</th><th>Призначив</th><th>Препарати</th>
             <th>Журнал</th><th>Виписано</th><th>Закрито</th><th>Стан</th><th></th></tr></thead><tbody>
-          ${doneRx.map(r=>`<tr><td class="mono">${r.no}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
+          ${doneRx.map(r=>`<tr><td class="mono">${r.no}${canRenum()?`<div><button class="btn sm" data-rxn="${r.id}" style="padding:2px 7px;margin-top:3px">змінити №</button></div>`:""}${r.cito?`<div><span class="tag crit">CITO!</span></div>`:""}</td>
             <td class="name">${esc(r.patient)}${patientLine(r)?`<div class="sub2">${esc(patientLine(r))}</div>`:""}</td>
             <td><span class="mono" style="color:var(--accent)">${r.dx?esc(r.dx.det||r.dx.sub||r.dx.code):"—"}</span>
               <div class="sub2">${r.dx?esc(r.dx.det?r.dx.detName:(r.dx.sub?(r.dx.subName||r.dx.name):r.dx.name)):""}</div></td>
@@ -4623,6 +4657,7 @@ function viewReq(){
     $("#rbody").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>reqDetails(b.dataset.view));
     $("#rbody").querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
     $("#rbody").querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>undoRxModal(b.dataset.undo));
+    $("#rbody").querySelectorAll("[data-rxn]").forEach(b=>b.onclick=()=>rxNoModal(b.dataset.rxn));
   }
 }
 function statusTag(r){
