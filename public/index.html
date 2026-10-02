@@ -913,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 22.09.2026 · передачі частинам";
+const BUILD = "збірка 28.09.2026 · бронь заявок";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -1394,10 +1394,23 @@ const patientLine = r => [r.rank, r.group, r.cat ? CAT_NAME(r.cat) : ""].filter(
 const RX_CHAIN   = ["post","senior"];                // призначення: пост → старша медсестра
 const CITO_CHAIN = ["apteka"];                       // Cito! — тільки склад аптеки
 const rxChain = r => (r && r.cito) ? CITO_CHAIN : RX_CHAIN;
-const rxAvail = (itemId, chain) => (chain || RX_CHAIN).reduce((s,l)=>s+avail(l,itemId), 0);
-function rxStockRows(){
+/* Скільки зарезервовано під заявками, які ще не виконані.
+   Поки заявка висить на підтвердженні, цей запас не можна виписати рецептом. */
+function reserved(loc, itemId){
+  return (S.requests||[]).filter(r => r.status === "pending" && r.to === loc)
+    .reduce((s2, r) => s2 + r.lines.filter(l => l.itemId === itemId)
+      .reduce((s3, l) => s3 + Math.max(0, (l.want||0) - (l.got||0)), 0), 0);
+}
+/* вільний залишок: наявне мінус зарезервоване */
+const freeAt = (loc, itemId) => Math.max(0, Math.round((avail(loc, itemId) - reserved(loc, itemId)) * 1000) / 1000);
+const reservedBy = (loc, itemId) => (S.requests||[])
+  .filter(r => r.status === "pending" && r.to === loc && r.lines.some(l => l.itemId === itemId))
+  .map(r => `${r.no} (${LOCS[r.from] ? LOCS[r.from].short : r.from})`).join(", ");
+
+const rxAvail = (itemId, chain) => (chain || RX_CHAIN).reduce((s,l)=>s+freeAt(l,itemId), 0);
+function rxStockRows(chain){
   const m = new Map();
-  RX_CHAIN.forEach(loc => stockRows(loc).forEach(r => {
+  (chain || RX_CHAIN).forEach(loc => stockRows(loc).forEach(r => {
     const cur = m.get(r.itemId);
     if(cur){ cur.qty += r.qty; cur.sum += r.sum; cur.per[loc] = r.qty; }
     else m.set(r.itemId, {itemId:r.itemId, item:r.item, qty:r.qty, sum:r.sum, per:{[loc]:r.qty}});
@@ -1409,7 +1422,7 @@ function planTake(itemId, need, chain){
   const plan = []; let left = need;
   for(const loc of (chain || RX_CHAIN)){
     if(left <= 0.0001) break;
-    const has = avail(loc, itemId);
+    const has = freeAt(loc, itemId);        // зарезервоване під заявками не чіпаємо
     if(has <= 0.0001) continue;
     const q = Math.min(has, left);
     plan.push({loc, qty:q}); left -= q;
@@ -1443,7 +1456,9 @@ function rxSettle(r){
 }
 const planLabel = p => p.length ? p.map(x => LOCS[x.loc].short + " " + qty(x.qty)).join(" · ") : "—";
 const haveLabel = (itemId, chain) => (chain || RX_CHAIN).filter(l => avail(l, itemId) > 0.0001)
-  .map(l => LOCS[l].short + " " + qty(avail(l, itemId))).join(" · ") || "немає";
+  .map(l => { const r2 = reserved(l, itemId);
+    return LOCS[l].short + " " + qty(freeAt(l, itemId)) + (r2 > 0.0001 ? ` (+${qty(r2)} у заявці)` : ""); })
+  .join(" · ") || "немає";
 
 /* ---------- заявки ---------- */
 const pending = () => S.requests.filter(r=>r.status==="pending");
@@ -5104,10 +5119,17 @@ function attachPicker(findId, selId, rows, onPick){
 /* ---------- виписування рецепта ---------- */
 function newRxModal(cito){
   const chain = cito ? CITO_CHAIN : RX_CHAIN;
-  const rows = cito ? stockRows("apteka") : rxStockRows();
+  /* У переліку — вільний залишок: наявне мінус зарезервоване заявками підрозділів.
+     Блокується саме замовлена кількість, решта лишається доступною для виписки. */
+  const all0 = (cito ? stockRows("apteka") : rxStockRows(chain))
+    .map(r => Object.assign({}, r, {qty: chain.reduce((s2,l)=>s2+freeAt(l, r.itemId), 0),
+      held: chain.reduce((s2,l)=>s2+reserved(l, r.itemId), 0),
+      by: cito ? reservedBy("apteka", r.itemId) : ""}));
+  const blocked = cito ? all0.filter(r => r.held > 0.0001) : [];
+  const rows = all0.filter(r => r.qty > 0.0001);
   if(!rows.length) return modal(cito ? "Терміновий рецепт" : "Призначення",
-    `<div class="empty"><strong>${cito ? "На складі аптеки немає залишків" : "Залишків немає ні на посту, ні у старшої медсестри"}</strong>${
-      cito ? "Призначати поки нічого." : "Замовте медикаменти заявкою або скористайтесь рецептом Cito!"}</div>`,
+    `<div class="empty"><strong>${cito ? "На складі аптеки немає вільних залишків" : "Вільних залишків немає ні на посту, ні у старшої медсестри"}</strong>${
+      cito ? "Усе наявне або витрачене, або зарезервоване під заявками підрозділів." : "Замовте медикаменти заявкою або скористайтесь рецептом Cito!"}</div>`,
     [{t:"Закрити", f:close}]);
   let lines = [];
   modal(cito ? "Рецепт Cito! — терміновий" : "Призначення на видачу препарату", `
@@ -5153,7 +5175,16 @@ function newRxModal(cito){
       <div class="field" style="width:130px"><label>Кількість</label><input type="number" id="rx-q" step="0.1" min="0" value="0.1"></div>
       <button class="btn" id="rx-add">Додати до призначення</button>
     </div>
-    <div id="rx-alt" style="margin:-6px 0 12px"></div>
+    <div id="rx-held" style="margin:-6px 0 6px"></div>
+    <div id="rx-alt" style="margin:0 0 12px"></div>
+    ${blocked.length ? `<div class="card" style="margin:0 0 12px"><header><h3>Заброньовано заявками</h3>
+        <span class="spacer"></span><span class="eyebrow">${blocked.length}</span></header>
+      <div class="pad" style="padding-top:8px">
+        <span class="sub2">Ці препарати замовлені підрозділами і чекають видачі з аптеки. Замовлена кількість заброньована — виписати можна лише те, що лишається понад неї.</span>
+        <div style="margin-top:8px">${blocked.map(r=>`<div class="sub2" style="margin-bottom:3px">
+          <b>${esc(r.item.name)}</b> — заброньовано ${qty(r.held)} ${esc(r.item.unit)} за заявкою ${esc(r.by)}${
+            r.qty > 0.0001 ? `, вільно ${qty(r.qty)}` : ", вільного залишку немає"}</div>`).join("")}</div>
+      </div></div>`:""}
     <div id="rx-lines"></div>
     <div class="field" style="margin-top:12px"><label>Коментар</label>
       <textarea id="rx-com" placeholder="Діагноз, спосіб застосування, тривалість курсу"></textarea></div>
@@ -5179,6 +5210,14 @@ function newRxModal(cito){
   attachPicker("rx-find", "rx-pick", rows, id => {
     const w = document.getElementById("rx-alt");
     if(w) w.innerHTML = id ? analogHTML(id, chain) : "";
+    const h = document.getElementById("rx-held");
+    if(h){
+      const held = chain.reduce((s2,l)=>s2+reserved(l, id), 0);
+      const who = chain.map(l=>reservedBy(l, id)).filter(Boolean).join("; ");
+      h.innerHTML = held > 0.0001
+        ? `<span class="sub2" style="color:var(--warn)">Зарезервовано під заявками: ${qty(held)} ${esc(item(id).unit)}${who?` — ${esc(who)}`:""}. Доступний лише вільний залишок.</span>`
+        : "";
+    }
   });
   loadMkh4().then(()=>{ if(document.getElementById("rx-detwrap")) renderDetail(); });
 
@@ -5312,6 +5351,15 @@ function newRxModal(cito){
     const id = $("#rx-pick").value, q = parseFloat($("#rx-q").value)||0;
     if(!id) return toast("Оберіть препарат зі списку", true);
     if(q<=0) return toast("Вкажіть кількість більшу за нуль", true);
+    /* зарезервоване під заявками підрозділів виписати не можна */
+    const freeNow = chain.reduce((s2,l)=>s2+freeAt(l, id), 0);
+    const already = lines.filter(l=>l.itemId===id).reduce((s2,l)=>s2+l.want, 0);
+    if(q + already > freeNow + 0.0001){
+      const held = chain.reduce((s2,l)=>s2+reserved(l, id), 0);
+      return toast(held > 0.0001
+        ? `Вільно лише ${qty(freeNow)} ${item(id).unit}: ${qty(held)} зарезервовано під заявками підрозділів`
+        : `Наявно лише ${qty(freeNow)} ${item(id).unit}`, true);
+    }
     const ex = lines.find(l=>l.itemId===id);
     if(ex) ex.want += q; else lines.push({itemId:id, want:q, got:0});
     $("#rx-q").value = 0.1;                     // наступна позиція починається з 0,1
