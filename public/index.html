@@ -913,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 28.09.2026 · бронь заявок";
+const BUILD = "збірка 01.10.2026 · виправлення видачі";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -2352,6 +2352,98 @@ const DOC_FIELDS = [
    Медикаменти повертаються на ті самі підрозділи й партії, з яких були списані. */
 const canUndo = r => ME.admin || S.role === "senior" ||
   (r.by === ME.name) || (rxChain(r).includes(S.role) && (r.lines||[]).some(l => (l.from||[]).some(f => f.loc === S.role)));
+
+/* ---------- виправлення виданої кількості ----------
+   Різниця дорівнює руху залишків: менше — повертаємо на партії, більше — доспискуємо FEFO. */
+function rxFixModal(id){
+  const r = (S.rx||[]).find(x => x.id === id);
+  if(!r) return;
+  if(!["issued","partial"].includes(r.status)) return toast("Виправляти можна лише видане призначення", true);
+  if(!canUndo(r)) return toast("Кількість виправляє той, хто видавав, старша медсестра або завідувач аптеки", true);
+  const chain = rxChain(r);
+
+  const draw = ()=>{
+    const box = document.getElementById("fx-lines");
+    if(!box) return;
+    box.innerHTML = `<table class="lines"><thead><tr><th>Препарат</th><th class="num">Видано</th>
+        <th class="num">Стало</th><th>Вільно на залишку</th></tr></thead><tbody>
+      ${r.lines.map((l,i)=>{const it=item(l.itemId); const free=rxAvail(l.itemId, chain); return `<tr>
+        <td>${esc(it.name)}<div class="sub2">${(l.from||[]).map(f=>LOCS[f.loc].short+" "+qty(f.qty)).join(" · ")||"—"}</div></td>
+        <td class="num">${qty(l.got||0)} ${esc(it.unit)}</td>
+        <td class="num"><input type="number" data-fx="${i}" class="mono" step="0.1" min="0"
+          value="${l.got||0}" style="width:90px;text-align:right"></td>
+        <td class="sub2">${qty(free)} ${esc(it.unit)}${free<=0.0001?" — більше взяти нізвідки":""}</td></tr>`}).join("")}
+    </tbody></table>`;
+  };
+
+  modal(`Виправлення кількості — ${esc(r.no)}`, `
+    <p class="sub2" style="margin-top:0">Пацієнт: <b>${esc(r.patient)}</b>${patientLine(r)?" · "+esc(patientLine(r)):""} · видано ${r.closed?dtstr(r.closed):"—"}.</p>
+    <div id="fx-lines" style="margin-top:10px"></div>
+    <div class="field" style="margin-top:12px"><label>Підстава виправлення</label>
+      <input type="text" id="fx-why" placeholder="помилка при видачі, частину повернено"></div>
+    <p class="sub2" style="margin-top:10px">Зменшення повертає медикаменти на ті самі партії; збільшення списує додатково за ${chain.map(l=>LOCS[l].short).join(" → ")}.</p>`,
+    [{t:"Скасувати", f:close},{t:"Зберегти", cls:"primary", f:apply}]);
+  draw();
+
+  function apply(){
+    const vals = [...document.querySelectorAll("[data-fx]")]
+      .map(i => ({i:+i.dataset.fx, v: Math.max(0, parseFloat(i.value) || 0)}));
+    const ch = [];
+    /* спершу перевіряємо, чи вистачить на всі збільшення */
+    for(const x of vals){
+      const l = r.lines[x.i], diff = Math.round((x.v - (l.got||0)) * 1000) / 1000;
+      if(diff > 0.0001 && diff > rxAvail(l.itemId, chain) + 0.0001)
+        return toast(`«${item(l.itemId).name}»: вільно лише ${qty(rxAvail(l.itemId, chain))} ${item(l.itemId).unit}`, true);
+    }
+    vals.forEach(x => {
+      const l = r.lines[x.i], it = item(l.itemId);
+      const diff = Math.round((x.v - (l.got||0)) * 1000) / 1000;
+      if(Math.abs(diff) < 0.0001) return;
+      if(diff < 0){
+        /* повертаємо з кінця переліку партій */
+        let back = -diff;
+        (l.from||[]).slice().reverse().forEach(f => {
+          if(back <= 0.0001) return;
+          const take = Math.min(back, f.qty);
+          const parts = (f.parts||[]).slice().reverse();
+          let left = take;
+          if(parts.length){
+            parts.forEach(pt => {
+              if(left <= 0.0001) return;
+              const q = Math.min(left, pt.qty);
+              addBatch(f.loc, l.itemId, q, pt.price, pt.expiry, pt.src || "повернення");
+              pt.qty = Math.round((pt.qty - q) * 1000) / 1000;
+              left -= q;
+            });
+            f.parts = (f.parts||[]).filter(pt => pt.qty > 0.0001);
+          }
+          if(left > 0.0001) addBatch(f.loc, l.itemId, left, 0, "", "повернення");
+          f.qty = Math.round((f.qty - take) * 1000) / 1000;
+          back -= take;
+        });
+        l.from = (l.from||[]).filter(f => f.qty > 0.0001);
+      }else{
+        const plan = planTake(l.itemId, diff, chain);
+        plan.forEach(pt => {
+          const took = takeFEFO(pt.loc, l.itemId, pt.qty).taken;
+          const ex = (l.from||[]).find(f => f.loc === pt.loc);
+          const add = took.map(y=>({qty:y.qty, price:y.price, expiry:y.expiry, src:y.src}));
+          if(ex){ ex.qty = Math.round((ex.qty + pt.qty)*1000)/1000; ex.parts = (ex.parts||[]).concat(add); }
+          else (l.from = l.from||[]).push({loc:pt.loc, qty:pt.qty, parts:add});
+        });
+      }
+      ch.push(`${it.name}: ${qty(l.got||0)} → ${qty(x.v)} ${it.unit}`);
+      l.got = x.v;
+    });
+    if(!ch.length){ close(); return toast("Змін немає"); }
+    mergeDupes();
+    const why = document.getElementById("fx-why").value.trim();
+    r.status = r.lines.every(l => (l.got||0) + 0.0001 >= l.want) ? "issued" : "partial";
+    log("Виправлення", `Виправлено видану кількість за ${r.no} (пацієнт ${r.patient}): ${ch.join("; ")}`
+      + (why ? `. Підстава: ${why}` : ""), {rx:r.no});
+    close(); toast("Кількість виправлено"); render();
+  }
+}
 
 function undoRxModal(id){
   const r = (S.rx||[]).find(x=>x.id===id);
@@ -4593,13 +4685,15 @@ function viewReq(){
             <td class="sub2">${r.free?`<div>${esc(r.free)}</div>`:""}${r.hosp?`<div style="color:var(--warn)">${esc(r.hosp)}</div>`:""}${!r.free&&!r.hosp?"—":""}</td>
             <td>${statusTag(r)}</td>
             <td style="text-align:right">${["issued","partial"].includes(r.status) && canUndo(r)
-              ? `<button class="btn sm danger" data-undo="${r.id}">Скасувати</button>` : ""}</td></tr>`).join("")}
+              ? `<button class="btn sm" data-fix="${r.id}">Кількість</button>
+                 <button class="btn sm danger" data-undo="${r.id}">Скасувати</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>За цей період записів немає</strong>Змініть межі або оберіть інший місяць.</div>`}
       </div>`;
 
     document.querySelectorAll("[data-mc]").forEach(b=>b.onclick=()=>{ flt.cat2 = b.dataset.mc; render(); });
     document.querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
     document.querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>undoRxModal(b.dataset.undo));
+    document.querySelectorAll("[data-fix]").forEach(b=>b.onclick=()=>rxFixModal(b.dataset.fix));
     document.querySelectorAll("[data-rxn]").forEach(b=>b.onclick=()=>rxNoModal(b.dataset.rxn));
     const bulk = document.getElementById("m-bulk");
     if(bulk) bulk.onclick = catBulkModal;
@@ -4878,7 +4972,8 @@ function viewReq(){
             <td class="mono sub2">${dtstr(r.created)}</td><td class="mono sub2">${r.closed?dtstr(r.closed):"—"}</td>
             <td>${statusTag(r)}${r.undo?`<div class="sub2">скасував ${esc(r.undo.by)}</div>`:""}</td>
             <td style="text-align:right">${["issued","partial"].includes(r.status) && canUndo(r)
-              ? `<button class="btn sm danger" data-undo="${r.id}">Скасувати видачу</button>` : ""}</td>
+              ? `<button class="btn sm" data-fix="${r.id}">Кількість</button>
+                 <button class="btn sm danger" data-undo="${r.id}">Скасувати видачу</button>` : ""}</td>
 </tr>`).join("")}
         </tbody></table></div>` : `<div class="empty"><strong>Виданих рецептів ще немає</strong>Тут з'являться виконані, частково виконані та відхилені рецепти.</div>`}
       </div>
@@ -4895,6 +4990,7 @@ function viewReq(){
     $("#rbody").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>reqDetails(b.dataset.view));
     $("#rbody").querySelectorAll("[data-setcat]").forEach(b=>b.onclick=()=>setCatModal(b.dataset.setcat));
     $("#rbody").querySelectorAll("[data-undo]").forEach(b=>b.onclick=()=>undoRxModal(b.dataset.undo));
+    $("#rbody").querySelectorAll("[data-fix]").forEach(b=>b.onclick=()=>rxFixModal(b.dataset.fix));
     $("#rbody").querySelectorAll("[data-rxn]").forEach(b=>b.onclick=()=>rxNoModal(b.dataset.rxn));
   }
 }
