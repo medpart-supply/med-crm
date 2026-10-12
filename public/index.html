@@ -913,12 +913,13 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 01.10.2026 · виправлення видачі";
+const BUILD = "збірка 09.10.2026 · розхід зі складу";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
 let sub = {apteka:"stock", req:"pending", units:"senior", feld:"stock", terms:"mine", jour:"temp", jourF:"out"};
-let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all", aFrom:"", aTo:"", aKind:"cito", aNo:"", aw:""};
+let flt = {stock:"", cat:"", unit:"", hist:"", histType:"all", month:"", monthKind:"", from:"", to:"", cat2:"all", aFrom:"", aTo:"", aKind:"cito", aNo:"", aw:"",
+  oSrc:"", oFrom:"", oTo:"", oKind:"all", oFind:""};
 
 const uid = p => p + "-" + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
@@ -4357,6 +4358,87 @@ const rxPending = () => (S.rx||[]).filter(r=>r.status==="pending");
 const rxReview  = () => (S.rx||[]).filter(r=>r.status==="review");   // чекають погодження СМС
 const canReview = () => S.role === "senior" || ME.admin;
 
+/* =========== РОЗХІД ЗІ СКЛАДУ =========== */
+/* Ціна, за якою препарат надходив: остання накладна до дати видачі.
+   Потрібна там, де партію у записі не збережено (старі видачі за заявками). */
+function priceAt(itemId, when){
+  const hit = (S.receipts||[]).filter(rc => !rc.undo && rc.at <= when + 86400000
+      && rc.lines.some(l => l.itemId === itemId && l.price > 0))
+    .sort((a,b)=>b.at-a.at)[0];
+  if(hit){ const l = hit.lines.find(x => x.itemId === itemId && x.price > 0);
+    if(l) return Math.round(l.price*100)/100; }
+  const any = (S.receipts||[]).filter(rc => !rc.undo
+      && rc.lines.some(l => l.itemId === itemId && l.price > 0)).sort((a,b)=>b.at-a.at)[0];
+  if(any){ const l = any.lines.find(x => x.itemId === itemId && x.price > 0);
+    if(l) return Math.round(l.price*100)/100; }
+  const b = S.batches.filter(x => x.itemId === itemId && x.price > 0).sort((a,b2)=>(b2.at||0)-(a.at||0))[0];
+  return b ? Math.round(b.price*100)/100 : 0;
+}
+
+/* Усе, що вийшло зі складу `src` за період, одним плоским переліком рядків.
+   Канали: заявки підрозділів, призначення та рецепти, видачі на підрозділи,
+   акти приймання-передачі іншій частині, списання. */
+function outLines(src, fromTs, toTs){
+  const out = [];
+  const push = (o) => {
+    if(!(o.qty > 0.0001)) return;
+    const it = item(o.itemId); if(!it) return;
+    const price = o.price != null && o.price > 0 ? Math.round(o.price*100)/100 : priceAt(o.itemId, o.at);
+    out.push(Object.assign({}, o, {it, unitName:it.unit, price, sum:o.qty * price}));
+  };
+  const inP = t => t >= fromTs && t < toTs;
+  const parted = (l, fallbackQty, at) => {
+    const ps = (l.parts||[]).filter(p => p.qty > 0.0001);
+    return ps.length ? ps.map(p => ({qty:p.qty, price:p.price})) : [{qty:fallbackQty, price:null}];
+  };
+
+  /* 1. заявки підрозділів: склад-постачальник — це r.to */
+  (S.requests||[]).filter(r => r.to === src && ["issued","partial"].includes(r.status))
+    .forEach(r => { const at = r.closed || r.created; if(!inP(at)) return;
+      r.lines.forEach(l => push({at, kind:"req", doc:r.no, rcp:LOCS[r.from].name, rcpKey:"loc:"+r.from,
+        unit:"", itemId:l.itemId, qty:l.got || 0, price:null, by:r.by2 || "", note:r.note || ""}));
+    });
+
+  /* 2. призначення та рецепти: беремо лише ту частину, що пішла з цього складу */
+  (S.rx||[]).filter(r => ["issued","partial"].includes(r.status))
+    .forEach(r => { const at = r.closed || r.created; if(!inP(at)) return;
+      const rcp = r.cito ? "Рецепти Cito! — пацієнти" : "Призначення — пацієнти";
+      r.lines.forEach(l => (l.from||[]).filter(f => f.loc === src).forEach(f => {
+        parted(f, f.qty, at).forEach(p => push({at, kind:r.cito ? "cito" : "rx", doc:r.no,
+          rcp, rcpKey:r.cito ? "cito" : "rx", unit:r.group || "не вказано",
+          itemId:l.itemId, qty:p.qty, price:p.price, by:r.doctor || "",
+          note:[r.patient, r.rank, r.cat ? CAT_NAME(r.cat) : ""].filter(Boolean).join(" · ")}));
+      }));
+    });
+
+  /* 3. видано на підрозділи */
+  (S.issues||[]).filter(x => x.loc === src).forEach(x => { if(!inP(x.at)) return;
+    parted(x, x.qty, x.at).forEach(p => push({at:x.at, kind:"issue", doc:x.note || "видача",
+      rcp:x.unit2 || "не вказано", rcpKey:"unit:"+(x.unit2 || "—"), unit:x.unit2 || "не вказано",
+      itemId:x.itemId, qty:p.qty, price:p.price, by:x.by || "",
+      note:[x.to, x.rank, x.contractor].filter(Boolean).join(" · ")}));
+  });
+
+  /* 4. акти приймання-передачі іншій частині — лише зі складу аптеки */
+  if(src === "apteka") (S.transfers||[]).filter(r => !r.undo).forEach(r => { if(!inP(r.at)) return;
+    r.lines.forEach(l => parted(l, l.qty, r.at).forEach(p => push({at:r.at, kind:"tr", doc:r.no,
+      rcp:r.to || "інша частина", rcpKey:"tr:"+(r.to || "—"), unit:"",
+      itemId:l.itemId, qty:p.qty, price:p.price != null ? p.price : l.price, by:r.by || "",
+      note:[r.doc, r.person].filter(Boolean).join(" · ")})));
+  });
+
+  /* 5. списання зі складу */
+  (S.writeoffs||[]).filter(x => x.loc === src && !x.undo).forEach(x => { if(!inP(x.at)) return;
+    (x.lines||[]).forEach(l => parted(l, l.qty, x.at).forEach(p => push({at:x.at, kind:"wo",
+      doc:x.why || "списання", rcp:"Списання" + (x.kind ? " — " + x.kind : ""), rcpKey:"wo",
+      unit:"", itemId:l.itemId, qty:p.qty, price:p.price, by:x.by || "", note:x.why || ""})));
+  });
+
+  return out.sort((a,b) => a.at - b.at);
+}
+const OUT_KIND = {req:"Заявка підрозділу", rx:"Призначення", cito:"Рецепт Cito!",
+  issue:"Видача на підрозділ", tr:"Акт приймання-передачі", wo:"Списання"};
+
 function viewReq(){
   const isDoc = LOCS[S.role].kind==="prescriber";
   const canRx = isDoc || S.role === "post";          // лікарі та пост медсестри
@@ -4375,7 +4457,11 @@ function viewReq(){
   const doneReq = S.requests.filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
   const doneRx  = (S.rx||[]).filter(r=>r.status!=="pending").sort((a,b)=>(b.closed||0)-(a.closed||0));
   if(isDoc && sub.req==="pending") sub.req = "rx";
-  if(!["pending","rx","hist","month","act"].includes(sub.req)) sub.req = isDoc ? "rx" : "pending";
+  /* розхід зі складу бачить той, у кого є склад, і завідувач аптеки */
+  const outLoc = ME.admin || S.role === "apteka" ? STOCK : STOCK.filter(l => l === S.role);
+  const canOut = outLoc.length > 0;
+  if(sub.req === "out" && !canOut) sub.req = isDoc ? "rx" : "pending";
+  if(!["pending","rx","hist","month","act","out"].includes(sub.req)) sub.req = isDoc ? "rx" : "pending";
 
   const v = $("#view");
   v.insertAdjacentHTML("beforeend", `<div class="row" style="margin-bottom:14px"><div class="seg">
@@ -4383,6 +4469,7 @@ function viewReq(){
       <button data-s="rx" class="${sub.req==="rx"?"on":""}">Призначення та рецепти (${pRx.length + rRx.length})</button>
       <button data-s="hist" class="${sub.req==="hist"?"on":""}">Історія</button>
       <button data-s="month" class="${sub.req==="month"?"on":""}">Облік за місяць</button>
+      ${canOut?`<button data-s="out" class="${sub.req==="out"?"on":""}">Розхід зі складу</button>`:""}
       <button data-s="act" class="${sub.req==="act"?"on":""}">Акти списання</button>
     </div></div><div id="rbody"></div>`);
   v.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{sub.req=b.dataset.s;render()});
@@ -4390,6 +4477,7 @@ function viewReq(){
   if(sub.req==="pending")     drawReq();
   else if(sub.req==="rx")     drawRx();
   else if(sub.req==="month")  drawMonth();
+  else if(sub.req==="out")    drawOut();
   else if(sub.req==="act")    drawAct();
   else                        drawHist();
 
@@ -4759,6 +4847,254 @@ function viewReq(){
       });
       XLSX.writeFile(wb, "oblik-" + flt.from + "_" + flt.to + "-" + kind + ".xlsx");
       log("Система", `Вивантажено облік ${title} за період ${periodLabel}: ${all.length} записів`);
+      toast("Файл сформовано");
+    };
+  }
+
+  /* --- розхід зі складу за місяцями: кому і скільки видано --- */
+  function drawOut(){
+    const now = today();
+    if(!flt.oSrc || !outLoc.includes(flt.oSrc)) flt.oSrc = outLoc.includes(S.role) ? S.role : outLoc[0];
+    if(!flt.oFrom) flt.oFrom = ymd(new Date(now.getFullYear(), now.getMonth() - 5, 1));
+    if(!flt.oTo)   flt.oTo   = ymd(now);
+    const dayLocal = v => { const m2 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v||""));
+      return m2 ? new Date(+m2[1], +m2[2]-1, +m2[3]) : null; };
+    const from = dayLocal(flt.oFrom) || new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const toIn = dayLocal(flt.oTo) || now;
+    const to = new Date(toIn.getFullYear(), toIn.getMonth(), toIn.getDate() + 1);
+    const src = flt.oSrc;
+    const label = dstr(from) + " — " + dstr(toIn);
+
+    const raw = outLines(src, +from, +to);
+    const kinds = [["all","Усе разом"],["req","Заявки підрозділів"],["cito","Рецепти Cito!"],
+      ["rx","Призначення"],["issue","Видачі на підрозділи"],["tr","Інша частина"],["seeli","Списання"]];
+    const kn = k => k === "seeli" ? "wo" : k;
+    const kind = flt.oKind || "all";
+    const q = flt.oFind.trim().toLowerCase();
+    const lines = raw.filter(x => (kind === "all" || x.kind === kn(kind))
+      && (!q || x.it.name.toLowerCase().includes(q) || (x.it.nomen||"").toLowerCase().includes(q)
+          || x.rcp.toLowerCase().includes(q) || (x.unit||"").toLowerCase().includes(q)));
+    const cnt = k => raw.filter(x => x.kind === kn(k)).length;
+
+    /* по місяцях: рядок — місяць, стовпці — канали розходу */
+    const mKeys = [];
+    for(let d2 = new Date(from.getFullYear(), from.getMonth(), 1); d2 <= toIn; d2.setMonth(d2.getMonth()+1))
+      mKeys.push(d2.getFullYear() + "-" + pad2(d2.getMonth()+1));
+    const chans = ["req","cito","rx","issue","tr","wo"];
+    const chanName = {req:"Заявки підрозділів", cito:"Рецепти Cito!", rx:"Призначення",
+      issue:"Видачі на підрозділи", tr:"Інша частина", wo:"Списання"};
+    const live = chans.filter(c => lines.some(x => x.kind === c));
+    const mRow = new Map(mKeys.map(k => [k, {k, byChan:{}, qty:0, sum:0, docs:new Set()}]));
+    lines.forEach(x => {
+      const k = new Date(x.at).getFullYear() + "-" + pad2(new Date(x.at).getMonth()+1);
+      if(!mRow.has(k)) mRow.set(k, {k, byChan:{}, qty:0, sum:0, docs:new Set()});
+      const r2 = mRow.get(k);
+      r2.byChan[x.kind] = (r2.byChan[x.kind] || 0) + x.qty;
+      r2.qty += x.qty; r2.sum += x.sum; r2.docs.add(x.kind + "|" + x.doc);
+    });
+    const months = [...mRow.values()].sort((a,b)=>a.k.localeCompare(b.k));
+    const monName = k => { const [y2,m2] = k.split("-").map(Number); return MON[m2-1] + " " + y2; };
+
+    /* по отримувачах */
+    const rcpM = new Map();
+    lines.forEach(x => {
+      if(!rcpM.has(x.rcpKey)) rcpM.set(x.rcpKey, {name:x.rcp, kind:x.kind, qty:0, sum:0,
+        docs:new Set(), items:new Set()});
+      const r2 = rcpM.get(x.rcpKey);
+      r2.qty += x.qty; r2.sum += x.sum; r2.docs.add(x.doc); r2.items.add(x.itemId);
+    });
+    const rcps = [...rcpM.values()].sort((a,b)=>b.sum - a.sum || b.qty - a.qty);
+
+    /* по препаратах + матриця препарат × отримувач */
+    const itM = new Map();
+    lines.forEach(x => {
+      if(!itM.has(x.itemId)) itM.set(x.itemId, {it:x.it, qty:0, sum:0, per:new Map()});
+      const r2 = itM.get(x.itemId);
+      r2.qty += x.qty; r2.sum += x.sum;
+      r2.per.set(x.rcp, (r2.per.get(x.rcp) || 0) + x.qty);
+    });
+    const its = [...itM.values()].sort((a,b)=>b.sum - a.sum || b.qty - a.qty);
+    const topRcp = rcps.slice(0, 8).map(r2 => r2.name);
+
+    const totQ = lines.reduce((s2,x)=>s2 + x.qty, 0);
+    const totS = lines.reduce((s2,x)=>s2 + x.sum, 0);
+    const docs = new Set(lines.map(x => x.kind + "|" + x.doc)).size;
+    const SHOW = 400;
+    const shown = lines.slice().sort((a,b)=>b.at - a.at).slice(0, SHOW);
+
+    $("#rbody").innerHTML = `
+      <div class="row" style="margin-bottom:14px">
+        <div class="field" style="width:200px"><label>Склад, з якого видавали</label>
+          <select id="o-src">${outLoc.map(l=>`<option value="${l}" ${src===l?"selected":""}>${LOCS[l].name}</option>`).join("")}</select></div>
+        <div class="field" style="width:150px"><label>Від</label>
+          <input type="date" id="o-from" value="${esc(flt.oFrom)}"></div>
+        <div class="field" style="width:150px"><label>До</label>
+          <input type="date" id="o-to" value="${esc(flt.oTo)}"></div>
+        <div class="field" style="width:230px"><label>Пошук</label>
+          <input type="text" id="o-find" value="${esc(flt.oFind)}" placeholder="препарат, підрозділ, отримувач"></div>
+        <button class="btn" id="o-m" style="height:37px">Цей місяць</button>
+        <button class="btn" id="o-y" style="height:37px">Рік</button>
+        <button class="btn" id="o-exp" style="height:37px">Вивантажити в Excel</button>
+      </div>
+      <p class="sub2" style="margin:-6px 0 12px">Розхід зі складу <b>${LOCS[src].name}</b> за період <b>${esc(label)}</b>.
+        Враховано видачі за заявками підрозділів, призначення та рецепти, видачі на підрозділи, акти приймання-передачі та списання.</p>
+
+      <div class="row" style="margin-bottom:14px"><div class="seg">
+        ${kinds.map(k=>`<button data-ok="${k[0]}" class="${kind===k[0]?"on":""}">${k[1]}${
+          k[0]==="all" ? ` (${raw.length})` : ` (${cnt(k[0])})`}</button>`).join("")}
+      </div></div>
+
+      <div class="grid g4" style="margin-bottom:14px">
+        <div class="stat acc"><div class="eyebrow">Документів</div><div class="v">${docs}</div>
+          <div class="n">${lines.length} рядків розходу</div></div>
+        <div class="stat"><div class="eyebrow">Найменувань</div><div class="v">${its.length}</div>
+          <div class="n">${rcps.length} отримувачів</div></div>
+        <div class="stat ok"><div class="eyebrow">Видано одиниць</div><div class="v">${qty(totQ)}</div>
+          <div class="n">за ${months.length} ${months.length===1?"місяць":months.length<5?"місяці":"місяців"}</div></div>
+        <div class="stat"><div class="eyebrow">Сума</div><div class="v">${money(totS)}</div>
+          <div class="n">грн за цінами надходження</div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px"><header><h3>Розхід за місяцями</h3><span class="spacer"></span>
+          <span class="eyebrow">${months.length}</span></header>
+        ${months.length ? `<div class="tw"><table><thead><tr><th>Місяць</th>
+          ${live.map(c=>`<th class="num">${chanName[c]}</th>`).join("")}
+          <th class="num">Усього од.</th><th class="num">Сума, грн</th><th class="num">Док.</th></tr></thead><tbody>
+          ${months.map(m=>`<tr><td class="name">${monName(m.k)}</td>
+            ${live.map(c=>`<td class="num">${m.byChan[c] ? qty(m.byChan[c]) : "—"}</td>`).join("")}
+            <td class="num" style="font-weight:600">${qty(m.qty)}</td>
+            <td class="num">${money(m.sum)}</td><td class="num sub2">${m.docs.size}</td></tr>`).join("")}
+          <tr style="border-top:2px solid var(--line)"><td style="font-weight:600">Разом</td>
+            ${live.map(c=>`<td class="num" style="font-weight:600">${qty(lines.filter(x=>x.kind===c).reduce((s2,x)=>s2+x.qty,0))}</td>`).join("")}
+            <td class="num" style="font-weight:700">${qty(totQ)}</td>
+            <td class="num" style="font-weight:700">${money(totS)}</td><td class="num">${docs}</td></tr>
+        </tbody></table></div>` : `<div class="empty"><strong>За цей період розходу не було</strong>Змініть межі періоду або склад.</div>`}
+      </div>
+
+      <div class="split">
+        <div class="card"><header><h3>Кому видано</h3><span class="spacer"></span>
+            <span class="eyebrow">${rcps.length}</span></header>
+          ${rcps.length ? `<div class="tw"><table><thead><tr><th>Отримувач</th><th>Канал</th>
+            <th class="num">Найм.</th><th class="num">Видано</th><th class="num">Сума, грн</th></tr></thead><tbody>
+            ${rcps.map(r2=>`<tr><td class="name">${esc(r2.name)}<div class="sub2">${r2.docs.size} док.</div></td>
+              <td class="sub2">${esc(OUT_KIND[r2.kind]||"—")}</td>
+              <td class="num sub2">${r2.items.size}</td>
+              <td class="num" style="font-weight:600">${qty(r2.qty)}</td>
+              <td class="num">${money(r2.sum)}</td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
+        </div>
+        <div class="card"><header><h3>Які препарати пішли зі складу</h3><span class="spacer"></span>
+            <span class="eyebrow">${its.length}</span></header>
+          ${its.length ? `<div class="tw"><table><thead><tr><th>Препарат</th><th class="num">Видано</th>
+            <th class="num">Сума, грн</th><th>Куди</th></tr></thead><tbody>
+            ${its.map(r2=>`<tr><td class="name">${esc(r2.it.name)}<div class="sub2 mono">${esc(r2.it.nomen||"—")}</div></td>
+              <td class="num" style="font-weight:600">${qty(r2.qty)} ${esc(r2.it.unit)}</td>
+              <td class="num">${money(r2.sum)}</td>
+              <td class="sub2">${[...r2.per.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3)
+                .map(([n,v])=>esc(n)+" "+qty(v)).join("; ")}</td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty">Даних немає</div>`}
+        </div>
+      </div>
+
+      ${its.length && topRcp.length ? `<div class="card" style="margin-top:14px">
+        <header><h3>Препарати × отримувачі</h3><span class="spacer"></span>
+          <span class="eyebrow">${topRcp.length} ${topRcp.length < rcps.length ? "найбільших" : ""}</span></header>
+        <div class="tw"><table><thead><tr><th>Препарат</th>
+          ${topRcp.map(n=>`<th class="num">${esc(n)}</th>`).join("")}<th class="num">Усього</th></tr></thead><tbody>
+          ${its.slice(0,60).map(r2=>`<tr><td class="name">${esc(r2.it.name)}</td>
+            ${topRcp.map(n=>`<td class="num">${r2.per.get(n) ? qty(r2.per.get(n)) : "—"}</td>`).join("")}
+            <td class="num" style="font-weight:600">${qty(r2.qty)}</td></tr>`).join("")}
+        </tbody></table></div>
+        ${its.length > 60 ? `<p class="sub2" style="padding:0 16px 12px">Показано 60 найбільших позицій; повний перелік — у вивантаженні в Excel.</p>`:""}
+      </div>` : ""}
+
+      <div class="card" style="margin-top:14px"><header><h3>Перелік видач</h3><span class="spacer"></span>
+          <span class="eyebrow">${lines.length}</span></header>
+        ${lines.length ? `<div class="tw"><table><thead><tr><th>Дата</th><th>Документ</th><th>Канал</th>
+          <th>Отримувач</th><th>Підрозділ</th><th>Препарат</th><th class="num">К-сть</th>
+          <th class="num">Ціна</th><th class="num">Сума</th><th>Підстава</th></tr></thead><tbody>
+          ${shown.map(x=>`<tr><td class="mono sub2">${dstr(new Date(x.at))}</td>
+            <td class="mono">${esc(x.doc||"—")}</td>
+            <td class="sub2">${esc(OUT_KIND[x.kind]||"")}</td>
+            <td>${esc(x.rcp)}</td><td class="sub2">${esc(x.unit||"—")}</td>
+            <td class="name">${esc(x.it.name)}<div class="sub2 mono">${esc(x.it.nomen||"—")}</div></td>
+            <td class="num" style="font-weight:600">${qty(x.qty)} ${esc(x.unitName)}</td>
+            <td class="num sub2">${x.price ? money(x.price) : "—"}</td>
+            <td class="num">${x.sum ? money(x.sum) : "—"}</td>
+            <td class="sub2">${esc(x.note||"—")}${x.by?`<div class="sub2">${esc(x.by)}</div>`:""}</td></tr>`).join("")}
+        </tbody></table></div>
+        ${lines.length > SHOW ? `<p class="sub2" style="padding:0 16px 12px">Показано ${SHOW} останніх рядків із ${lines.length}; повний перелік — у вивантаженні в Excel.</p>`:""}`
+        : `<div class="empty"><strong>Розходу за цими умовами немає</strong>Змініть період, склад або канал.</div>`}
+      </div>`;
+
+    document.querySelectorAll("[data-ok]").forEach(b=>b.onclick=()=>{ flt.oKind = b.dataset.ok; render(); });
+    document.getElementById("o-src").onchange = e => { flt.oSrc = e.target.value; render(); };
+    const onF = e => { const v = e.target.value; if(!v) return;
+      flt.oFrom = v; if(flt.oTo < flt.oFrom) flt.oTo = flt.oFrom; render(); };
+    const onT = e => { const v = e.target.value; if(!v) return;
+      flt.oTo = v; if(flt.oTo < flt.oFrom) flt.oFrom = flt.oTo; render(); };
+    document.getElementById("o-from").onchange = onF;
+    document.getElementById("o-from").oninput  = onF;
+    document.getElementById("o-to").onchange = onT;
+    document.getElementById("o-to").oninput  = onT;
+    const fi = document.getElementById("o-find");
+    fi.oninput = e => { flt.oFind = e.target.value; const p = e.target.selectionStart; render();
+      const f2 = document.getElementById("o-find"); if(f2){ f2.focus(); f2.setSelectionRange(p,p); } };
+    document.getElementById("o-m").onclick = ()=>{
+      flt.oFrom = ymd(new Date(now.getFullYear(), now.getMonth(), 1)); flt.oTo = ymd(now); render(); };
+    document.getElementById("o-y").onclick = ()=>{
+      flt.oFrom = ymd(new Date(now.getFullYear(), 0, 1)); flt.oTo = ymd(now); render(); };
+
+    document.getElementById("o-exp").onclick = ()=>{
+      const wb = XLSX.utils.book_new();
+      const a1 = [["Дата","Документ","Канал розходу","Склад","Отримувач","Підрозділ","Препарат",
+        "Номенклатурний номер","Одиниця","Кількість","Ціна за одиницю","Сума","Хто видав","Підстава"]];
+      lines.forEach(x => a1.push([dstr(new Date(x.at)), x.doc||"", OUT_KIND[x.kind]||"", LOCS[src].name,
+        x.rcp, x.unit||"", x.it.name, x.it.nomen||"", x.unitName,
+        Math.round(x.qty*1000)/1000, x.price||0, Math.round(x.sum*100)/100, x.by||"", x.note||""]));
+      a1.push(["","","","","","","","","Разом", Math.round(totQ*1000)/1000, "", Math.round(totS*100)/100]);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a1), "Перелік");
+
+      const a2 = [["Місяць"].concat(live.map(c=>chanName[c])).concat(["Усього одиниць","Сума, грн","Документів"])];
+      months.forEach(m => a2.push([monName(m.k)].concat(live.map(c=>Math.round((m.byChan[c]||0)*1000)/1000))
+        .concat([Math.round(m.qty*1000)/1000, Math.round(m.sum*100)/100, m.docs.size])));
+      a2.push(["Разом"].concat(live.map(c=>Math.round(lines.filter(x=>x.kind===c).reduce((s2,x)=>s2+x.qty,0)*1000)/1000))
+        .concat([Math.round(totQ*1000)/1000, Math.round(totS*100)/100, docs]));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a2), "За місяцями");
+
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+        [["Отримувач","Канал розходу","Документів","Найменувань","Видано одиниць","Сума, грн"]].concat(
+          rcps.map(r2=>[r2.name, OUT_KIND[r2.kind]||"", r2.docs.size, r2.items.size,
+            Math.round(r2.qty*1000)/1000, Math.round(r2.sum*100)/100]))), "За отримувачами");
+
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+        [["Препарат","Номенклатурний номер","Одиниця","Видано","Сума, грн","Основні отримувачі"]].concat(
+          its.map(r2=>[r2.it.name, r2.it.nomen||"", r2.it.unit, Math.round(r2.qty*1000)/1000,
+            Math.round(r2.sum*100)/100, [...r2.per.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5)
+              .map(([n,v])=>n+" — "+qty(v)).join("; ")]))), "За препаратами");
+
+      const allRcp = rcps.map(r2=>r2.name);
+      const a5 = [["Препарат","Ном. номер","Одиниця"].concat(allRcp).concat(["Усього"])];
+      its.forEach(r2 => a5.push([r2.it.name, r2.it.nomen||"", r2.it.unit]
+        .concat(allRcp.map(n=>Math.round((r2.per.get(n)||0)*1000)/1000))
+        .concat([Math.round(r2.qty*1000)/1000])));
+      a5.push(["Разом","",""].concat(allRcp.map(n=>Math.round(
+        lines.filter(x=>x.rcp===n).reduce((s2,x)=>s2+x.qty,0)*1000)/1000)).concat([Math.round(totQ*1000)/1000]));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a5), "Препарати × отримувачі");
+
+      /* окремий аркуш на кожен місяць: що і кому видано */
+      months.filter(m=>m.qty>0).forEach(m => {
+        const ml = lines.filter(x => new Date(x.at).getFullYear() + "-" + pad2(new Date(x.at).getMonth()+1) === m.k);
+        const am = [["Дата","Документ","Канал","Отримувач","Підрозділ","Препарат","Одиниця","Кількість","Ціна","Сума"]];
+        ml.forEach(x => am.push([dstr(new Date(x.at)), x.doc||"", OUT_KIND[x.kind]||"", x.rcp, x.unit||"",
+          x.it.name, x.unitName, Math.round(x.qty*1000)/1000, x.price||0, Math.round(x.sum*100)/100]));
+        am.push(["","","","","","","Разом", Math.round(m.qty*1000)/1000, "", Math.round(m.sum*100)/100]);
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(am), m.k);
+      });
+
+      XLSX.writeFile(wb, "rozhid-" + LOCS[src].short + "-" + flt.oFrom + "_" + flt.oTo + ".xlsx");
+      log("Система", `Вивантажено звіт про розхід зі складу ${LOCS[src].name} за ${label}: `
+        + `${lines.length} рядків, ${qty(totQ)} од. на ${money(totS)} грн`);
       toast("Файл сформовано");
     };
   }
