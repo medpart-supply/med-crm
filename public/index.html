@@ -913,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 09.10.2026 · розхід зі складу";
+const BUILD = "збірка 14.10.2026 · очищення пошуку";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -5523,6 +5523,19 @@ function attachPicker(findId, selId, rows, onPick){
       toast("Обрано: " + it.name);
     }, {rows});
     wrap.appendChild(b);
+    /* швидко стерти попередній пошук і повернути повний перелік */
+    const cl = document.createElement("button");
+    cl.type = "button"; cl.className = "btn"; cl.id = findId + "-clr";
+    cl.textContent = "Очистити"; cl.title = "Стерти пошук і показати всі позиції";
+    cl.disabled = !inp0.value;
+    cl.onclick = ()=>{
+      inp0.value = "";
+      inp0.dispatchEvent(new Event("input"));
+      cl.disabled = true;
+      inp0.focus();
+    };
+    inp0.addEventListener("input", ()=>{ cl.disabled = !inp0.value; });
+    wrap.appendChild(cl);
   }
   const inp = document.getElementById(findId), sel = document.getElementById(selId);
   const opts = rows.map(r => ({
