@@ -913,7 +913,7 @@ const LOCS = {
 const ORDER = ["apteka","senior","feldsher","doctors","post"];
 const STOCK = ["apteka","senior","feldsher","post"];   // де медикаменти реально зберігаються
 const SKEY = "medcrm:v1";
-const BUILD = "збірка 14.10.2026 · очищення пошуку";
+const BUILD = "збірка 18.11.2026 · зняття залишків";
 
 let S = null;          // стан
 let tab = "dash";      // активна вкладка
@@ -943,7 +943,7 @@ const SHELF_COLOR = {expired:"#9E2430", critical:"#C4543F", soon:"#B08A1E", ok:"
 
 /* ---------- сховище ---------- */
 function blank(){
-  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], awards:[], writeoffs:[], transfers:[], contractors:{}, codes:{}, users:[],
+  return {items:[], batches:[], requests:[], log:[], rx:[], assets:[], tasks:[], taskLog:[], temp:[], issues:[], receipts:[], awards:[], writeoffs:[], transfers:[], counts:[], contractors:{}, codes:{}, users:[],
     org:{name:"", addr:"", edrpou:"", lic:""}, role:"apteka", inv:0, req:0, rxNo:0, citoNo:0, trNo:0};
 }
 async function load(){
@@ -1076,7 +1076,7 @@ function snapshot(){
   delete c.role;
   return JSON.stringify(c);
 }
-const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","awards","writeoffs","transfers","users","log"];
+const MERGE_ARRAYS = ["items","batches","requests","rx","assets","tasks","taskLog","temp","issues","receipts","awards","writeoffs","transfers","counts","users","log"];
 const byId = arr => { const m = new Map(); (arr||[]).forEach(x=>{ if(x && x.id) m.set(x.id, x); }); return m; };
 
 /* Тристороннє злиття: що було в базі (base), що зробив я (mine),
@@ -2167,8 +2167,12 @@ function viewApteka(){
     const q = flt.cat.trim().toLowerCase();
     const list = S.items.filter(i=> !q || i.name.toLowerCase().includes(q) || (i.nomen||"").toLowerCase().includes(q))
       .sort((a,b)=>a.name.localeCompare(b.name,"uk"));
+    const nCount = (S.counts||[]).length;
     $("#body").innerHTML = `<div class="card"><header><h3>Каталог препаратів</h3><span class="spacer"></span>
-      <span class="eyebrow">${list.length} найменувань</span></header>
+      <span class="eyebrow">${list.length} найменувань</span>
+      ${canCount()? `<button class="btn sm" id="ct-sms-go">Зняти СМС і ПМС</button>
+        <button class="btn sm primary" id="ct-go">Зняти залишки</button>`:""}
+      ${nCount? `<button class="btn sm" id="ct-list">Знімки (${nCount})</button>`:""}</header>
       ${list.length? `<div class="tw"><table><thead><tr><th>Найменування</th><th>Ном. номер</th><th>Діюча речовина</th><th>ATC</th><th>Од.</th>
         ${STOCK.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}<th class="num">Разом</th>
         <th>Найближчий термін</th><th></th>${canEditExp?"<th></th>":""}</tr></thead><tbody>
@@ -2195,7 +2199,268 @@ function viewApteka(){
     $("#body").querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>expiryModal(b.dataset.exp));
     $("#body").querySelectorAll("[data-inn]").forEach(b=>b.onclick=()=>innModal(b.dataset.inn));
     $("#body").querySelectorAll("[data-doc]").forEach(b=>b.onclick=()=>docModal(b.dataset.doc));
+    if($("#ct-go"))     $("#ct-go").onclick     = ()=>countModal();
+    if($("#ct-sms-go")) $("#ct-sms-go").onclick = ()=>countModal(["senior","post"]);
+    if($("#ct-list"))   $("#ct-list").onclick   = ()=>countsModal();
   }
+}
+
+/* ---------- зняття залишків по каталогу ----------
+   Знімок наявного на вибраних складах на певну дату: аркуш для перевірки
+   по факту (графи «фактично» та «різниця» лишаються порожніми під ручний
+   перелік), з можливістю зберегти знімок і згодом порівняти з поточним. */
+function countRows(locs, withZero){
+  const rows = S.items.map(i => {
+    const bs = S.batches.filter(b => b.itemId === i.id && locs.includes(b.loc) && b.qty > 0.0001);
+    const per = {}; let tot = 0, sum = 0;
+    locs.forEach(l => { per[l] = 0; });
+    bs.forEach(b => { per[b.loc] += b.qty; tot += b.qty; sum += b.qty * (b.price || 0); });
+    const near = bs.slice().sort((a,b)=>(dparse(a.expiry)||9e15)-(dparse(b.expiry)||9e15))[0];
+    return {item:i, itemId:i.id, per, tot, sum, price: tot > 0 ? sum / tot : 0,
+      near: near ? near.expiry : null, nb: bs.length};
+  }).filter(r => withZero || r.tot > 0.0001);
+  rows.sort((a,b)=>a.item.name.localeCompare(b.item.name,"uk"));
+  return rows;
+}
+const canCount = () => ME && (ME.admin || STOCK.includes(ME.loc));
+
+function countModal(preset){
+  if(!canCount()) return toast("Знімати залишки може той, у кого є склад, або адміністратор", true);
+  /* типово — усі склади; зняття СМС і ПМС відкривається окремою кнопкою */
+  let locs = (preset && preset.length ? preset : STOCK).slice();
+  let zero = false, q = "";
+  const body = () => {
+    const rows = countRows(locs, zero).filter(r => !q
+      || r.item.name.toLowerCase().includes(q) || (r.item.nomen||"").toLowerCase().includes(q));
+    const tot = rows.reduce((s,r)=>s+r.tot, 0), sum = rows.reduce((s,r)=>s+r.sum, 0);
+    const w = document.getElementById("ct-body"); if(!w) return;
+    w.innerHTML = `
+      <div class="grid g4" style="margin-bottom:12px">
+        <div class="stat acc"><div class="eyebrow">Найменувань</div><div class="v">${rows.length}</div>
+          <div class="n">${rows.filter(r=>r.tot>0.0001).length} з залишком</div></div>
+        <div class="stat"><div class="eyebrow">Усього одиниць</div><div class="v">${qty(tot)}</div>
+          <div class="n">на ${locs.length} ${locs.length===1?"складі":"складах"}</div></div>
+        <div class="stat ok"><div class="eyebrow">Сума</div><div class="v">${money(sum)}</div>
+          <div class="n">грн за цінами партій</div></div>
+        <div class="stat"><div class="eyebrow">Партій</div><div class="v">${rows.reduce((s,r)=>s+r.nb,0)}</div>
+          <div class="n">враховано у знімку</div></div>
+      </div>
+      ${rows.length ? `<div class="tw" style="max-height:340px"><table><thead><tr><th>№</th><th>Найменування</th>
+        <th>Ном. номер</th><th>Од.</th>${locs.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}
+        <th class="num">Разом</th><th class="num">Ціна</th><th class="num">Сума</th>
+        <th>Термін</th></tr></thead><tbody>
+        ${rows.map((r,n)=>`<tr><td class="sub2">${n+1}</td>
+          <td class="name">${esc(r.item.name)}</td>
+          <td class="mono sub2">${esc(r.item.nomen||"—")}</td>
+          <td class="sub2">${esc(r.item.unit)}</td>
+          ${locs.map(l=>`<td class="num" style="${r.per[l]>0.0001?"":"color:var(--faint)"}">${
+            r.per[l]>0.0001?qty(r.per[l]):"—"}</td>`).join("")}
+          <td class="num" style="font-weight:600">${qty(r.tot)}</td>
+          <td class="num sub2">${r.price?money(r.price):"—"}</td>
+          <td class="num">${r.sum?money(r.sum):"—"}</td>
+          <td class="sub2">${r.near?dstr(r.near):"—"}</td></tr>`).join("")}
+        <tr style="border-top:2px solid var(--line)"><td></td><td style="font-weight:600">Разом</td><td></td><td></td>
+          ${locs.map(l=>`<td class="num" style="font-weight:600">${qty(rows.reduce((s,r)=>s+r.per[l],0))}</td>`).join("")}
+          <td class="num" style="font-weight:700">${qty(tot)}</td><td></td>
+          <td class="num" style="font-weight:700">${money(sum)}</td><td></td></tr>
+      </tbody></table></div>` : `<div class="empty"><strong>За цими умовами позицій немає</strong>Виберіть інші склади або увімкніть нульові залишки.</div>`}`;
+  };
+
+  modal("Зняти залишки по каталогу", `
+    <p class="sub2" style="margin-top:0">Знімок наявного на вибрану дату. У вивантаженні в Excel є порожні графи
+      «фактично» та «різниця» — для перерахунку по факту й підпису комісії.</p>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field" style="width:160px"><label>Дата зняття</label>
+        <input type="date" id="ct-date" value="${ymd(today())}"></div>
+      <div class="field" style="flex:1;min-width:200px"><label>Підстава / примітка</label>
+        <input type="text" id="ct-why" placeholder="щомісячне зняття залишків"></div>
+      <div class="field" style="width:200px"><label>Пошук у переліку</label>
+        <input type="text" id="ct-q" placeholder="назва або ном. номер"></div>
+    </div>
+    <div class="field" style="margin-bottom:6px"><label>Склади, по яких знімаємо</label>
+      <div class="row" style="gap:14px;flex-wrap:wrap">
+        ${STOCK.map(l=>`<label class="chk"><input type="checkbox" data-cl="${l}" ${locs.includes(l)?"checked":""}>
+          <span>${LOCS[l].name} <span class="sub2">(${LOCS[l].short})</span></span></label>`).join("")}
+        <label class="chk"><input type="checkbox" id="ct-zero"><span>показувати позиції з нульовим залишком</span></label>
+      </div></div>
+    <div class="row" style="margin:0 0 12px">
+      <button type="button" class="btn sm" id="ct-sms">Лише СМС і ПМС</button>
+      <button type="button" class="btn sm" id="ct-all">Усі склади</button>
+    </div>
+    <div id="ct-body"></div>`,
+    [{t:"Вивантажити в Excel", cls:"primary", f:()=>exportCount()},
+     {t:"Зберегти знімок", f:()=>saveCount()},
+     {t:"Закрити", f:close}]);
+
+  const el = id => document.getElementById(id);
+  const sync = ()=>{ document.querySelectorAll("[data-cl]").forEach(c=>{ c.checked = locs.includes(c.dataset.cl); }); body(); };
+  document.querySelectorAll("[data-cl]").forEach(c => c.onchange = ()=>{
+    const l = c.dataset.cl;
+    if(c.checked){ if(!locs.includes(l)) locs.push(l); }
+    else locs = locs.filter(x => x !== l);
+    locs = STOCK.filter(x => locs.includes(x));
+    if(!locs.length){ locs = [l]; toast("Хоча б один склад має бути вибраний", true); }
+    sync();
+  });
+  el("ct-zero").onchange = e => { zero = e.target.checked; body(); };
+  el("ct-q").oninput = e => { q = e.target.value.trim().toLowerCase(); body(); };
+  el("ct-sms").onclick = ()=>{ locs = ["senior","post"]; sync(); };
+  el("ct-all").onclick = ()=>{ locs = STOCK.slice(); sync(); };
+  body();
+
+  function sheet(){
+    const q0 = q;
+    return {rows: countRows(locs, zero).filter(r => !q0
+        || r.item.name.toLowerCase().includes(q0) || (r.item.nomen||"").toLowerCase().includes(q0)),
+      date: el("ct-date") ? el("ct-date").value : ymd(today()),
+      why: el("ct-why") ? el("ct-why").value.trim() : ""};
+  }
+
+  function exportCount(){
+    const s = sheet();
+    if(!s.rows.length) return toast("Нічого вивантажувати", true);
+    const a = [];
+    a.push(["Відомість зняття залишків медикаментів"]);
+    a.push([(S.act && S.act.unit) ? S.act.unit : "Медичний пункт"]);
+    a.push(["Станом на", dstr(s.date), "", "Склади:", locs.map(l=>LOCS[l].name).join(", ")]);
+    a.push(["Підстава", s.why || "—", "", "Знімав", ME.name + " · " + LOCS[ME.loc].name]);
+    a.push([]);
+    a.push(["№","Найменування","Номенклатурний номер","Одиниця"]
+      .concat(locs.map(l=>LOCS[l].short)).concat(["Разом за обліком","Ціна за одиницю","Сума, грн",
+        "Фактично","Різниця","Найближчий термін","Примітка"]));
+    s.rows.forEach((r,n)=>a.push([n+1, r.item.name, r.item.nomen||"", r.item.unit]
+      .concat(locs.map(l=>Math.round(r.per[l]*1000)/1000))
+      .concat([Math.round(r.tot*1000)/1000, Math.round(r.price*100)/100, Math.round(r.sum*100)/100,
+        "", "", r.near?dstr(r.near):"", ""])));
+    a.push(["","Разом","",""].concat(locs.map(l=>Math.round(s.rows.reduce((x,r)=>x+r.per[l],0)*1000)/1000))
+      .concat([Math.round(s.rows.reduce((x,r)=>x+r.tot,0)*1000)/1000, "",
+        Math.round(s.rows.reduce((x,r)=>x+r.sum,0)*100)/100, "", "", "", ""]));
+    a.push([]);
+    a.push(["Залишки зняв:", "", "", "", "", "", "", "", "____________", "(підпис)"]);
+    a.push(["Перевірив:", "", "", "", "", "", "", "", "____________", "(підпис)"]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a), "Залишки");
+    /* окремий аркуш на кожен склад — щоб роздати матеріально відповідальним */
+    locs.forEach(l => {
+      const r2 = s.rows.filter(r => r.per[l] > 0.0001);
+      if(!r2.length) return;
+      const b = [[`Залишки — ${LOCS[l].name}`],["Станом на", dstr(s.date)],[],
+        ["№","Найменування","Ном. номер","Одиниця","За обліком","Фактично","Різниця","Термін"]];
+      r2.forEach((r,n)=>b.push([n+1, r.item.name, r.item.nomen||"", r.item.unit,
+        Math.round(r.per[l]*1000)/1000, "", "", r.near?dstr(r.near):""]));
+      b.push(["","Разом","","", Math.round(r2.reduce((x,r)=>x+r.per[l],0)*1000)/1000, "", "", ""]);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(b), LOCS[l].short);
+    });
+    XLSX.writeFile(wb, "zalyshky-" + s.date + ".xlsx");
+    log("Система", `Знято залишки по каталогу станом на ${dstr(s.date)}: `
+      + `${s.rows.length} найменувань, ${qty(s.rows.reduce((x,r)=>x+r.tot,0))} од. `
+      + `(${locs.map(l=>LOCS[l].short).join(", ")})`);
+    toast("Відомість сформовано");
+  }
+
+  function saveCount(){
+    const s = sheet();
+    if(!s.rows.length) return toast("Нічого зберігати", true);
+    S.counts = S.counts || [];
+    const rec = {id:uid("ct"), at:Date.now(), date:s.date, why:s.why, locs:locs.slice(),
+      by:ME.name, byLoc:ME.loc,
+      lines:s.rows.map(r=>({itemId:r.itemId, name:r.item.name, nomen:r.item.nomen||"",
+        unit:r.item.unit, per:Object.assign({}, r.per), tot:Math.round(r.tot*1000)/1000,
+        price:Math.round(r.price*100)/100, sum:Math.round(r.sum*100)/100}))};
+    S.counts.unshift(rec);
+    if(S.counts.length > 60) S.counts.length = 60;
+    log("Система", `Збережено знімок залишків станом на ${dstr(s.date)}: `
+      + `${rec.lines.length} найменувань (${locs.map(l=>LOCS[l].short).join(", ")})`);
+    save(); close(); render();
+    toast("Знімок залишків збережено");
+  }
+}
+
+/* перелік збережених знімків */
+function countsModal(){
+  const list = (S.counts||[]).slice();
+  const canDel = ME && ME.admin;
+  modal("Збережені зняття залишків", `
+    <p class="sub2" style="margin-top:0">Кожен знімок зберігає залишки на момент зняття. Відкрийте знімок,
+      щоб порівняти його з тим, що на складах зараз.</p>
+    ${list.length ? `<div class="tw" style="max-height:400px"><table><thead><tr>
+        <th>Станом на</th><th>Склади</th><th class="num">Найм.</th><th class="num">Одиниць</th>
+        <th class="num">Сума, грн</th><th>Знімав</th><th>Підстава</th><th></th></tr></thead><tbody>
+      ${list.map(c=>`<tr>
+        <td class="mono">${dstr(c.date)}<div class="sub2">${dstr(c.at)}</div></td>
+        <td class="sub2">${(c.locs||[]).map(l=>LOCS[l]?LOCS[l].short:l).join(", ")}</td>
+        <td class="num">${c.lines.length}</td>
+        <td class="num" style="font-weight:600">${qty(c.lines.reduce((s,l)=>s+l.tot,0))}</td>
+        <td class="num">${money(c.lines.reduce((s,l)=>s+(l.sum||0),0))}</td>
+        <td class="sub2">${esc(c.by||"—")}</td>
+        <td class="sub2">${esc(c.why||"—")}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="btn sm" data-cv="${c.id}">Відкрити</button>
+          ${canDel?`<button class="btn sm danger" data-cd="${c.id}">Вилучити</button>`:""}</td>
+      </tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty"><strong>Знімків ще немає</strong>Натисніть «Зняти залишки» у каталозі.</div>`}`,
+    [{t:"Закрити", f:close}]);
+  document.querySelectorAll("[data-cv]").forEach(b=>b.onclick=()=>countView(b.dataset.cv));
+  document.querySelectorAll("[data-cd]").forEach(b=>b.onclick=()=>{
+    const c = (S.counts||[]).find(x=>x.id===b.dataset.cd); if(!c) return;
+    modal("Вилучити знімок?", `<p>Знімок залишків станом на <b>${dstr(c.date)}</b> буде вилучено.
+      Самі залишки це не змінює.</p>`,
+      [{t:"Вилучити", cls:"danger", f:()=>{
+        S.counts = (S.counts||[]).filter(x=>x.id!==c.id);
+        log("Система", `Вилучено знімок залишків від ${dstr(c.date)}`);
+        save(); countsModal(); toast("Знімок вилучено");
+      }},{t:"Скасувати", f:countsModal}]);
+  });
+}
+
+/* знімок проти поточного стану */
+function countView(id){
+  const c = (S.counts||[]).find(x=>x.id===id);
+  if(!c) return toast("Знімок не знайдено", true);
+  const locs = (c.locs||STOCK).filter(l=>LOCS[l]);
+  const rows = c.lines.map(l=>{
+    const now = {}; let nt = 0;
+    locs.forEach(x=>{ now[x] = avail(x, l.itemId); nt += now[x]; });
+    return {l, now, nt, diff: nt - l.tot};
+  });
+  const moved = rows.filter(r=>Math.abs(r.diff) > 0.0001);
+  modal(`Залишки станом на ${dstr(c.date)}`, `
+    <div class="grid g3" style="margin-bottom:12px">
+      <div class="stat acc"><div class="eyebrow">Найменувань</div><div class="v">${c.lines.length}</div>
+        <div class="n">${(c.locs||[]).map(l=>LOCS[l]?LOCS[l].short:l).join(", ")}</div></div>
+      <div class="stat"><div class="eyebrow">Було одиниць</div><div class="v">${qty(c.lines.reduce((s,l)=>s+l.tot,0))}</div>
+        <div class="n">на суму ${money(c.lines.reduce((s,l)=>s+(l.sum||0),0))} грн</div></div>
+      <div class="stat ${moved.length?"warn":"ok"}"><div class="eyebrow">Змінилось з того часу</div>
+        <div class="v">${moved.length}</div><div class="n">позицій розійшлося з обліком</div></div>
+    </div>
+    <p class="sub2">Знімав: <b>${esc(c.by||"—")}</b>${c.byLoc&&LOCS[c.byLoc]?` · ${LOCS[c.byLoc].name}`:""}${
+      c.why?` · підстава: ${esc(c.why)}`:""}</p>
+    <div class="tw" style="max-height:360px"><table><thead><tr><th>Найменування</th><th>Од.</th>
+      ${locs.map(l=>`<th class="num">${LOCS[l].short}</th>`).join("")}
+      <th class="num">Було</th><th class="num">Зараз</th><th class="num">Зміна</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td class="name">${esc(r.l.name)}<div class="sub2 mono">${esc(r.l.nomen||"—")}</div></td>
+        <td class="sub2">${esc(r.l.unit)}</td>
+        ${locs.map(l=>`<td class="num sub2">${(r.l.per&&r.l.per[l]>0.0001)?qty(r.l.per[l]):"—"}</td>`).join("")}
+        <td class="num" style="font-weight:600">${qty(r.l.tot)}</td>
+        <td class="num">${qty(r.nt)}</td>
+        <td class="num" style="color:${Math.abs(r.diff)<0.0001?"var(--faint)":r.diff<0?"var(--crit)":"var(--ok)"}">${
+          Math.abs(r.diff)<0.0001?"—":(r.diff>0?"+":"")+qty(r.diff)}</td></tr>`).join("")}
+    </tbody></table></div>`,
+    [{t:"Вивантажити в Excel", cls:"primary", f:()=>{
+      const a = [["Знімок залишків станом на", dstr(c.date)],
+        ["Знімав", (c.by||"") + (c.byLoc&&LOCS[c.byLoc]?" · "+LOCS[c.byLoc].name:"")],
+        ["Підстава", c.why||"—"], ["Склади", locs.map(l=>LOCS[l].name).join(", ")], [],
+        ["№","Найменування","Ном. номер","Одиниця"].concat(locs.map(l=>LOCS[l].short))
+          .concat(["Було за обліком","Ціна","Сума, грн","Зараз на складах","Зміна"])];
+      rows.forEach((r,n)=>a.push([n+1, r.l.name, r.l.nomen||"", r.l.unit]
+        .concat(locs.map(l=>Math.round(((r.l.per&&r.l.per[l])||0)*1000)/1000))
+        .concat([r.l.tot, r.l.price||0, r.l.sum||0, Math.round(r.nt*1000)/1000,
+          Math.round(r.diff*1000)/1000])));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a), "Знімок");
+      XLSX.writeFile(wb, "zalyshky-" + c.date + "-znimok.xlsx");
+      toast("Файл сформовано");
+    }},{t:"Назад", f:countsModal},{t:"Закрити", f:close}]);
 }
 
 /* ---------- надходження за накладними ----------
